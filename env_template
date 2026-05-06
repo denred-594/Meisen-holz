@@ -1,0 +1,9 @@
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/redel
+
+# Docker Compose variables
+POSTGRES_DB=redel
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+RUN_SEED=false
+BETTER_AUTH_SECRET=please-change-this-secret
+BETTER_AUTH_URL=http://localhost:3000

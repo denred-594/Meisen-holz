@@ -1,0 +1,23 @@
+html,
+body {
+  background: #f7f9fc;
+  color: #1e1f21;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.mantine-Table-th {
+  font-weight: 600;
+}
+
+.card-section-title {
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: #5f6b7a;
+}

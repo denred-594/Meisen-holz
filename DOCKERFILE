@@ -1,0 +1,26 @@
+FROM oven/bun:1-alpine AS deps
+
+WORKDIR /app
+
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile 
+
+
+FROM node:20-alpine AS app
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+RUN NEXT_IGNORE_TYPE_ERRORS=1 npx next build
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+
+EXPOSE 3000
+
+ENTRYPOINT ["sh", "./scripts/docker-entrypoint.sh"]
+
