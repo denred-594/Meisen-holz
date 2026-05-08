@@ -10,4 +10,4 @@ BETTER_AUTH_URL=http://localhost:3000
 
 ADMIN_EMAIL=info@holz-meisen.de
 ADMIN_PASSWORD=MeisenMeisenMeisen1!
-ADMIN_RESET=true
+ADMIN_RESET=false
