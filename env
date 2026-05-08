@@ -1,0 +1,13 @@
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/redel
+
+# Docker Compose variables
+POSTGRES_DB=redel
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+RUN_SEED=true
+BETTER_AUTH_SECRET=please-change-this-secret-to-at-least-32-chars
+BETTER_AUTH_URL=http://localhost:3000
+
+ADMIN_EMAIL=info@holz-meisen.de
+ADMIN_PASSWORD=MeisenMeisenMeisen1!
+ADMIN_RESET=true

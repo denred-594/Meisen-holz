@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    env_file:
+      - ./env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-redel}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -22,6 +24,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - ./env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-redel}
       RUN_SEED: ${RUN_SEED:-false}
