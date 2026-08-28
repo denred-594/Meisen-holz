@@ -3,11 +3,17 @@ import ExcelJS from "exceljs";
 import { db } from "@/server/db";
 import { kisten, KISTEN_TYP_LABELS } from "@/server/db/schemas";
 import { eq } from "drizzle-orm";
-import { Kiste } from "@/server/domain/kiste";
+import { HOLZ_DICHTE_KG_PRO_M3, Kiste } from "@/server/domain/kiste";
 import { settingsService } from "@/server/services/settings.service";
 import { calculateFinalPrice } from "@/utils/pricing";
 
 const CURRENCY_FORMAT = "#,##0.00 [$€-407]";
+
+/** Zahl mit deutschem Dezimalkomma, für die Formeltexte in Abschnitt 3. */
+const formatNumber = (value: number, decimals: number) =>
+  value.toFixed(decimals).replace(".", ",");
+const formatEuro = (value: number) => `${formatNumber(value, 2)} €`;
+const formatFactor = (value: number) => formatNumber(value, 6);
 
 function addSectionTitle(ws: ExcelJS.Worksheet, row: number, text: string) {
   ws.mergeCells(`A${row}:J${row}`);
@@ -49,14 +55,19 @@ export async function buildKistenSpecWorkbook(kisteId: number) {
       bretterBoden: { with: { varianten: true } },
       balkenLaengs: true,
       balkenQuer: true,
+      riegel: true,
     },
   });
 
   if (!k) throw new Error("Kiste nicht gefunden");
   const aggregate = Kiste.fromRow(k);
   const pricingSettings = await settingsService.getLatest();
+  const plattenGewichtKgProM2 = Number(
+    pricingSettings.plattenGewichtKgProM2 ?? 8,
+  );
 
   const materialCost = aggregate.materialCost;
+  const calculatedWeightKg = aggregate.calculateWeightKg(plattenGewichtKgProM2);
   const gesamtAussenflaecheM2 = aggregate.gesamtAussenflaecheM2;
   const calculated = calculateFinalPrice(materialCost, {
     factorA: Number(pricingSettings.factorA),
@@ -139,6 +150,13 @@ export async function buildKistenSpecWorkbook(kisteId: number) {
         ? `${k.balkenQuer.typ} (${k.balkenQuer.staerke}×${k.balkenQuer.breite} mm)`
         : "-",
     ],
+    [
+      "Riegel",
+      k.riegel
+        ? `${k.riegel.typ} (${k.riegelDicke}×${k.riegelBreite} mm)`
+        : `${k.riegelDicke}×${k.riegelBreite} mm (keine Riegelart gewählt)`,
+    ],
+    ["Seitenriegel pro Seite", Number(k.seitenriegelAnzahl)],
   ];
 
   const infoStart = row;
@@ -193,7 +211,9 @@ export async function buildKistenSpecWorkbook(kisteId: number) {
     const areaM2 =
       (component.masse.laenge * component.masse.breite) / 1_000_000;
     const volumeCm3 =
-      (component.masse.laenge * component.masse.breite * component.masse.dicke) /
+      (component.masse.laenge *
+        component.masse.breite *
+        component.masse.dicke) /
       1000;
     const volumeM3 =
       (component.masse.laenge *
@@ -213,9 +233,9 @@ export async function buildKistenSpecWorkbook(kisteId: number) {
     ws.getCell(`G${row}`).value = component.masse.dicke;
     ws.getCell(`H${row}`).value = isBrett
       ? component.pricingUnit === "cm3"
-        ? `${volumeCm3.toFixed(2)} cm³`
-        : `${areaM2.toFixed(4)} m²`
-      : `${volumeM3.toFixed(4)} m³`;
+        ? `${volumeCm3.toFixed(2).replace(".", ",")} cm³`
+        : `${areaM2.toFixed(4).replace(".", ",")} m²`
+      : `${volumeM3.toFixed(4).replace(".", ",")} m³`;
     ws.getCell(`I${row}`).value = unitPrice;
     ws.getCell(`J${row}`).value = totalPrice;
 
@@ -246,37 +266,161 @@ export async function buildKistenSpecWorkbook(kisteId: number) {
   addSectionTitle(ws, row, "3) Kennzahlen und Kalkulation");
   row += 1;
 
-  const metrics: Array<[string, number, string?]> = [
-    ["Gewicht", Number(k.gewicht), "kg"],
-    ["Gesamt-Außenquadratmeter", gesamtAussenflaecheM2, "m²"],
-    ["Materialkosten", materialCost, "EUR"],
-    ["Arbeitsanteil aus Material", calculated.laborFromMaterial, "EUR"],
-    ["Manuelle Arbeitskosten", calculated.manualLabor, "EUR"],
-    ["Zwischensumme", calculated.subtotal, "EUR"],
-    ["Kalkulierter Endpreis", calculated.final, "EUR"],
-    ["Faktor A", Number(pricingSettings.factorA), ""],
-    ["Faktor B", Number(pricingSettings.factorB), ""],
-    ["Faktor C", Number(pricingSettings.factorC), ""],
-    ["Faktor D", Number(pricingSettings.factorD), ""],
+  const factorA = Number(pricingSettings.factorA);
+  const factorB = Number(pricingSettings.factorB);
+  const factorC = Number(pricingSettings.factorC);
+  const factorD = Number(pricingSettings.factorD);
+  const hourlyRate = Number(pricingSettings.hourlyRate);
+  const workHours = Number(pricingSettings.workHours);
+  const aussenmasse = aggregate.aussenmasse;
+  const materialAfterAB = materialCost * factorA * factorB;
+
+  const metrics: Array<{
+    label: string;
+    formula: string;
+    value: number;
+    unit: string;
+  }> = [
+    {
+      label: "Gewicht",
+      formula:
+        `${formatNumber(aggregate.massivholzVolumenM3, 4)} m³ × ` +
+        `${HOLZ_DICHTE_KG_PRO_M3} kg/m³ + ` +
+        `${formatNumber(aggregate.plattenFlaecheM2, 4)} m² × ` +
+        `${formatNumber(plattenGewichtKgProM2, 2)} kg/m²`,
+      value: calculatedWeightKg,
+      unit: "kg",
+    },
+    {
+      label: "Gesamt-Außenquadratmeter",
+      formula:
+        `2 × (${aussenmasse.laenge}×${aussenmasse.breite} + ` +
+        `${aussenmasse.laenge}×${aussenmasse.hoehe} + ` +
+        `${aussenmasse.breite}×${aussenmasse.hoehe}) mm² ÷ 1.000.000`,
+      value: gesamtAussenflaecheM2,
+      unit: "m²",
+    },
+    {
+      label: "Materialkosten",
+      formula: `Summe der Gesamtpreise aus Abschnitt 2 (${components.length} Positionen, inkl. Riegel)`,
+      value: materialCost,
+      unit: "EUR",
+    },
+    {
+      label: "Arbeitsanteil aus Material",
+      formula:
+        `${formatEuro(materialCost)} × ${formatFactor(factorA)} × ` +
+        `${formatFactor(factorB)} − ${formatEuro(materialCost)}`,
+      value: calculated.laborFromMaterial,
+      unit: "EUR",
+    },
+    {
+      label: "Manuelle Arbeitskosten",
+      formula: `${formatNumber(workHours, 2)} h × ${formatEuro(hourlyRate)}/h`,
+      value: calculated.manualLabor,
+      unit: "EUR",
+    },
+    {
+      label: "Zwischensumme",
+      formula:
+        `${formatEuro(materialCost)} × ${formatFactor(factorA)} × ` +
+        `${formatFactor(factorB)} + ${formatEuro(calculated.manualLabor)} = ` +
+        `${formatEuro(materialAfterAB)} + ${formatEuro(calculated.manualLabor)}`,
+      value: calculated.subtotal,
+      unit: "EUR",
+    },
+    {
+      label: "Kalkulierter Endpreis",
+      formula:
+        `${formatEuro(calculated.subtotal)} × ${formatFactor(factorC)} × ` +
+        `${formatFactor(factorD)}`,
+      value: calculated.final,
+      unit: "EUR",
+    },
+    {
+      label: "Faktor A",
+      formula: "Einstellungen – Aufschlag auf die Materialkosten",
+      value: factorA,
+      unit: "",
+    },
+    {
+      label: "Faktor B",
+      formula: "Einstellungen – allgemeiner Kostenaufschlag",
+      value: factorB,
+      unit: "",
+    },
+    {
+      label: "Faktor C",
+      formula: "Einstellungen – Aufschlag auf die Zwischensumme",
+      value: factorC,
+      unit: "",
+    },
+    {
+      label: "Faktor D",
+      formula: "Einstellungen – letzter Aufschlag",
+      value: factorD,
+      unit: "",
+    },
   ];
 
-  const metricStart = row;
-  for (const [label, value, unit] of metrics) {
-    ws.getCell(`A${row}`).value = label;
+  const metricHeaderRow = row;
+  const metricHeaders: Array<[string, string]> = [
+    ["A", "Bezeichnung"],
+    ["C", "Formel (mit eingesetzten Zahlen)"],
+    ["H", "Wert"],
+    ["J", "Einheit"],
+  ];
+  ws.mergeCells(`A${row}:B${row}`);
+  ws.mergeCells(`C${row}:G${row}`);
+  ws.mergeCells(`H${row}:I${row}`);
+  for (const [column, title] of metricHeaders) {
+    const cell = ws.getCell(`${column}${row}`);
+    cell.value = title;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF374151" },
+    };
+    cell.alignment = { horizontal: "left", vertical: "middle" };
+  }
+  row += 1;
+
+  for (const metric of metrics) {
+    ws.mergeCells(`A${row}:B${row}`);
+    ws.getCell(`A${row}`).value = metric.label;
     ws.getCell(`A${row}`).font = { bold: true, color: { argb: "FF374151" } };
-    ws.mergeCells(`B${row}:H${row}`);
-    ws.getCell(`B${row}`).value = unit === "kg" ? value : Number(value);
-    if (unit === "EUR") {
-      ws.getCell(`B${row}`).numFmt = CURRENCY_FORMAT;
-    } else if (unit === "kg") {
-      ws.getCell(`B${row}`).numFmt = '#,##0.00 "kg"';
-    } else if (unit === "m²") {
-      ws.getCell(`B${row}`).numFmt = '#,##0.0000 "m²"';
+    ws.getCell(`A${row}`).alignment = {
+      horizontal: "left",
+      vertical: "middle",
+    };
+
+    ws.mergeCells(`C${row}:G${row}`);
+    ws.getCell(`C${row}`).value = metric.formula;
+    ws.getCell(`C${row}`).font = { color: { argb: "FF4B5563" } };
+    ws.getCell(`C${row}`).alignment = {
+      horizontal: "left",
+      vertical: "middle",
+    };
+
+    ws.mergeCells(`H${row}:I${row}`);
+    const valueCell = ws.getCell(`H${row}`);
+    valueCell.value = Number(metric.value);
+    valueCell.alignment = { horizontal: "right", vertical: "middle" };
+    if (metric.unit === "EUR") {
+      valueCell.numFmt = CURRENCY_FORMAT;
+    } else if (metric.unit === "kg") {
+      valueCell.numFmt = '#,##0.00 "kg"';
+    } else if (metric.unit === "m²") {
+      valueCell.numFmt = '#,##0.0000 "m²"';
+    } else {
+      valueCell.numFmt = "#,##0.000000";
     }
-    ws.getCell(`I${row}`).value = unit ?? "";
+
+    ws.getCell(`J${row}`).value = metric.unit;
     row += 1;
   }
-  setBorder(ws, metricStart, row - 1);
+  setBorder(ws, metricHeaderRow, row - 1);
 
   ws.views = [{ state: "frozen", ySplit: headerRow }];
 

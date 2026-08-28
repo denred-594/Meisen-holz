@@ -46,6 +46,19 @@ export const holzbalken = pgTable("holzbalken", {
   }).notNull(),
 });
 
+// Riegel ("Bretter für Riegel"): Preis pro Kubikmeter, analog zu Holzbalken
+export const holzriegel = pgTable("holzriegel", {
+  id: serial("id").primaryKey(),
+  typ: text("typ").notNull(),
+  staerke: integer("staerke").notNull(),
+  breite: integer("breite").notNull(),
+  preisProKubikmeter: numeric("preis_pro_kubikmeter", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  }).notNull(),
+});
+
 // Kistentyp Metadaten
 export const kistentyp = pgTable("kistentyp", {
   id: text("id").primaryKey(),
@@ -86,36 +99,8 @@ export type KistenTypId = (typeof kistenTypIdEnum.enumValues)[number];
 // Price Settings (Verlaufs-Tabelle möglich; für Abfragen nehmen wir den letzten Eintrag)
 export const priceSettings = pgTable("price_settings", {
   id: serial("id").primaryKey(),
-  materialCostFactor: numeric("material_cost_factor", {
-    precision: 8,
-    scale: 4,
-    mode: "number",
-  })
-    .notNull()
-    .default(1),
-  // Prozentualer Aufschlag (Bestand) – wird weiterhin unterstützt
-  generalMarkup: numeric("general_markup", {
-    precision: 8,
-    scale: 4,
-    mode: "number",
-  })
-    .notNull()
-    .default(0.3),
-  additionalMarkup1: numeric("additional_markup1", {
-    precision: 8,
-    scale: 4,
-    mode: "number",
-  })
-    .notNull()
-    .default(0.1111),
-  additionalMarkup2: numeric("additional_markup2", {
-    precision: 8,
-    scale: 4,
-    mode: "number",
-  })
-    .notNull()
-    .default(0.0204),
-  // Neue, explizite Pipeline-Faktoren und Euro-Pauschale
+  // Kalkulationskette laut Auftrag:
+  // Materialkosten × A × B + (Arbeitsstunden × Stundensatz), dann × C × D
   factorA: numeric("factor_a", { precision: 10, scale: 6, mode: "number" })
     .notNull()
     .default(100 / 90),
@@ -128,13 +113,6 @@ export const priceSettings = pgTable("price_settings", {
   factorD: numeric("factor_d", { precision: 10, scale: 6, mode: "number" })
     .notNull()
     .default(100 / 98),
-  generalMarkupEuro: numeric("general_markup_euro", {
-    precision: 12,
-    scale: 2,
-    mode: "number",
-  })
-    .notNull()
-    .default(0),
   hourlyRate: numeric("hourly_rate", {
     precision: 10,
     scale: 2,
@@ -145,13 +123,19 @@ export const priceSettings = pgTable("price_settings", {
   workHours: numeric("work_hours", { precision: 10, scale: 2, mode: "number" })
     .notNull()
     .default(4),
+  plattenGewichtKgProM2: numeric("platten_gewicht_kg_pro_m2", {
+    precision: 10,
+    scale: 2,
+    mode: "number",
+  })
+    .notNull()
+    .default(8),
   updatedAt: timestamp("updated_at", {
     withTimezone: false,
     mode: "date",
   }).defaultNow(),
 });
 
-// Kisten: Normalisiert (keine JSON-Felder)
 export const kisten = pgTable("kisten", {
   id: serial("id").primaryKey(),
   name: text("name").notNull().default(""),
@@ -176,9 +160,12 @@ export const kisten = pgTable("kisten", {
   holzBalkenQuerID: integer("holz_balken_quer_id").references(
     () => holzbalken.id,
   ),
+  holzRiegelID: integer("holz_riegel_id").references(() => holzriegel.id),
   balkenLaengsAnzahl: integer("balken_laengs_anzahl").notNull().default(0),
   balkenQuerAnzahl: integer("balken_quer_anzahl").notNull().default(0),
   bodenAnzahl: integer("boden_anzahl").notNull().default(1),
+  // Senkrechte bzw. längs laufende Seitenriegel je Seite (Meisen: Schwartz 2x2, Bellmer 2x3)
+  seitenriegelAnzahl: integer("seitenriegel_anzahl").notNull().default(3),
   dickeBretter: integer("dicke_bretter").notNull(),
   dickeBretterBoden: integer("dicke_bretter_boden"),
   riegelDicke: integer("riegel_dicke").notNull(),
@@ -210,6 +197,10 @@ export const kistenRelations = relations(kisten, ({ one }) => ({
     fields: [kisten.holzBalkenQuerID],
     references: [holzbalken.id],
   }),
+  riegel: one(holzriegel, {
+    fields: [kisten.holzRiegelID],
+    references: [holzriegel.id],
+  }),
 }));
 
 export const bretterRelations = relations(holzplatten, ({ many }) => ({
@@ -231,6 +222,8 @@ export type T_NewHolzplatte = typeof holzplatten.$inferInsert;
 export type T_HolzplatteDicke = typeof holzplattenDicken.$inferSelect;
 export type T_Holzbalken = typeof holzbalken.$inferSelect;
 export type T_NewHolzbalken = typeof holzbalken.$inferInsert;
+export type T_Holzriegel = typeof holzriegel.$inferSelect;
+export type T_NewHolzriegel = typeof holzriegel.$inferInsert;
 export type T_Kiste = typeof kisten.$inferSelect;
 export type T_NewKiste = typeof kisten.$inferInsert;
 export type T_PriceSettingsRow = typeof priceSettings.$inferSelect;

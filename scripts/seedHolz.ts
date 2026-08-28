@@ -3,6 +3,7 @@ import { db } from "@/server/db";
 import {
   holzplatten,
   holzbalken,
+  holzriegel,
   priceSettings,
   kistentyp,
   holzplattenDicken,
@@ -94,6 +95,22 @@ async function run() {
       await db.insert(holzbalken).values(row as any);
     }
     console.log("Holzbalken seeded");
+  }
+  const [riegelCount] = await db.select({ c: count() }).from(holzriegel);
+  if (riegelCount.c === 0) {
+    // Querschnitte laut Meisen-Spezifikation: 23x80 (Schwartz), 23x100 (Bellmer).
+    // ACHTUNG: preisProKubikmeter sind Platzhalter und müssen vor dem ersten
+    // echten Angebot durch die tatsächlichen Einkaufspreise ersetzt werden
+    // (Einstellungen → Riegel (Bretter)).
+    const riegelRows = [
+      { typ: "Fichte", staerke: 23, breite: 80, preisProKubikmeter: 420 },
+      { typ: "Fichte", staerke: 23, breite: 100, preisProKubikmeter: 420 },
+      { typ: "Kiefer", staerke: 23, breite: 100, preisProKubikmeter: 480 },
+    ];
+    for (const row of riegelRows) {
+      await db.insert(holzriegel).values(row as any);
+    }
+    console.log("Riegel seeded (Preise sind Platzhalter)");
   }
   const [settingsCount] = await db.select({ c: count() }).from(priceSettings);
   if (settingsCount.c === 0) {

@@ -50,6 +50,52 @@ export function BalkenSelect({
   );
 }
 
+interface RiegelSelectProps {
+  value?: number;
+  onChange: (
+    id: number | undefined,
+    meta?: { staerke: number; breite: number }
+  ) => void;
+  label?: string;
+  error?: ReactNode;
+}
+
+export function RiegelSelect({
+  value,
+  onChange,
+  error,
+  label = "Riegelart",
+}: RiegelSelectProps) {
+  const trpc = useTRPC();
+  const { data } = useQuery(trpc.material.holzriegel.queryOptions());
+  const options = useMemo(
+    () =>
+      (data ?? []).map((r) => ({
+        value: String(r.id),
+        label: `${r.typ} (${r.staerke}x${r.breite} mm)`,
+      })),
+    [data]
+  );
+  return (
+    <Select
+      label={label}
+      placeholder="Riegel wählen"
+      data={options}
+      value={value ? String(value) : null}
+      onChange={(v) => {
+        const obj = (data ?? []).find((x) => String(x.id) === v);
+        onChange(
+          obj ? obj.id : undefined,
+          obj ? { staerke: obj.staerke, breite: obj.breite } : undefined
+        );
+      }}
+      error={error}
+      searchable
+      nothingFoundMessage="Keine Einträge"
+    />
+  );
+}
+
 interface PlatteSelectProps {
   value?: number;
   onChange: (id: number | undefined, meta?: { dicken: number[] }) => void;

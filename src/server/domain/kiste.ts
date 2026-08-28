@@ -3,6 +3,7 @@ import {
   T_Holzbalken,
   T_Holzplatte,
   T_HolzplatteDicke,
+  T_Holzriegel,
   T_Kiste,
 } from "@/server/db/schemas";
 
@@ -12,7 +13,7 @@ export type T_Masse = {
   dicke: number;
 };
 
-export type T_CalculatedComponent_Type = "Brett" | "Balken";
+export type T_CalculatedComponent_Type = "Brett" | "Balken" | "Riegel";
 export type T_CalculatedComponent_PricingUnit = "m2" | "cm3" | "m3";
 
 export type T_CalculatedComponent = {
@@ -37,6 +38,7 @@ export interface T_KisteMaterialDetails {
   selectedBrettVarianteBoden?: T_HolzplatteDicke | null;
   holzBalkenLaengs?: T_Holzbalken | null;
   holzBalkenQuer?: T_Holzbalken | null;
+  holzRiegel?: T_Holzriegel | null;
 }
 
 export type T_KisteRowWithRelations = T_Kiste &
@@ -45,6 +47,7 @@ export type T_KisteRowWithRelations = T_Kiste &
     bretterBoden?: T_HolzplatteWithVariants | null;
     balkenLaengs?: T_Holzbalken | null;
     balkenQuer?: T_Holzbalken | null;
+    riegel?: T_Holzriegel | null;
   };
 
 export interface T_Innenmasse {
@@ -57,11 +60,11 @@ export interface T_KisteConfigInput {
   name?: string;
   kistentypId: KistenTypId;
   innenmasse: T_Innenmasse;
-  gewicht: number;
   holzBretterID: number;
   holzBretterBodenID?: number | null;
   holzBalkenLaengsID?: number | null;
   holzBalkenQuerID?: number | null;
+  holzRiegelID?: number | null;
   dickeBretter: number;
   dickeBretterBoden?: number | null;
   riegelDicke: number;
@@ -69,6 +72,7 @@ export interface T_KisteConfigInput {
   balkenLaengsAnzahl: number;
   balkenQuerAnzahl: number;
   bodenAnzahl: number;
+  seitenriegelAnzahl?: number;
 }
 
 export interface T_KisteData extends T_KisteMaterialDetails {
@@ -81,6 +85,7 @@ export interface T_KisteData extends T_KisteMaterialDetails {
   holzBretterBodenID?: number | null;
   holzBalkenLaengsID?: number | null;
   holzBalkenQuerID?: number | null;
+  holzRiegelID?: number | null;
   dickeBretter: number;
   dickeBretterBoden?: number | null;
   riegelDicke: number;
@@ -89,6 +94,7 @@ export interface T_KisteData extends T_KisteMaterialDetails {
   balkenLaengsAnzahl: number;
   balkenQuerAnzahl: number;
   bodenAnzahl: number;
+  seitenriegelAnzahl: number;
 }
 
 type BrettPricing = {
@@ -96,6 +102,28 @@ type BrettPricing = {
   pricingUnit: "m2" | "cm3";
   basisMenge: number;
 };
+
+export const HOLZ_DICHTE_KG_PRO_M3 = 425;
+const DEFAULT_PLATTEN_GEWICHT_KG_PRO_M2 = 8;
+
+/**
+ * Einzug der Deckelriegel gegenüber der Deckelkante.
+ * Quelle: Meisen-Spezifikation Schwartz, Zeilen 35/36 ("minus 15 / 15").
+ */
+const DECKELRIEGEL_EINZUG_MM = 15;
+
+/**
+ * Anzahl Seitenriegel je Seite laut Meisen-Spezifikation:
+ * Schwartz Zeilen 42/43 = "2x2", Bellmer Q Zeile 43 / LQ Zeile 44 = "2x3".
+ */
+export const SEITENRIEGEL_DEFAULT_PRO_SEITE: Record<KistenTypId, number> = {
+  schwartz: 2,
+  bellmer_q: 3,
+  bellmer_lq: 3,
+};
+
+/** Köpferiegel laut Spezifikation immer "2x2": 2 Köpfe mit je 2 Riegeln. */
+const KOEPFERIEGEL_PRO_KOPF = 2;
 
 export class Kiste {
   constructor(private readonly data: T_KisteData) {}
@@ -115,6 +143,8 @@ export class Kiste {
       null;
     const holzBalkenQuer =
       related?.holzBalkenQuer ?? row.holzBalkenQuer ?? row.balkenQuer ?? null;
+    const holzRiegel =
+      related?.holzRiegel ?? row.holzRiegel ?? row.riegel ?? null;
     const selectedBrettVariante =
       related?.selectedBrettVariante ??
       row.selectedBrettVariante ??
@@ -145,6 +175,7 @@ export class Kiste {
       holzBretterBodenID: row.holzBretterBodenID ?? null,
       holzBalkenLaengsID: row.holzBalkenLaengsID ?? null,
       holzBalkenQuerID: row.holzBalkenQuerID ?? null,
+      holzRiegelID: row.holzRiegelID ?? null,
       dickeBretter: row.dickeBretter,
       dickeBretterBoden: row.dickeBretterBoden ?? null,
       riegelDicke: row.riegelDicke,
@@ -152,10 +183,13 @@ export class Kiste {
       balkenLaengsAnzahl: row.balkenLaengsAnzahl ?? 0,
       balkenQuerAnzahl: row.balkenQuerAnzahl ?? 0,
       bodenAnzahl: Math.max(1, row.bodenAnzahl ?? 1),
+      seitenriegelAnzahl:
+        row.seitenriegelAnzahl ?? SEITENRIEGEL_DEFAULT_PRO_SEITE[row.kistentyp],
       holzBrett,
       holzBrettBoden,
       holzBalkenLaengs,
       holzBalkenQuer,
+      holzRiegel,
       selectedBrettVariante,
       selectedBrettVarianteBoden,
     });
@@ -167,11 +201,12 @@ export class Kiste {
       name: input.name,
       kistentypId: input.kistentypId,
       innenmasse: input.innenmasse,
-      gewicht: input.gewicht,
+      gewicht: 0,
       holzBretterID: input.holzBretterID,
       holzBretterBodenID: input.holzBretterBodenID ?? null,
       holzBalkenLaengsID: input.holzBalkenLaengsID ?? null,
       holzBalkenQuerID: input.holzBalkenQuerID,
+      holzRiegelID: input.holzRiegelID ?? null,
       dickeBretter: input.dickeBretter,
       dickeBretterBoden: input.dickeBretterBoden ?? null,
       riegelDicke: input.riegelDicke,
@@ -179,6 +214,11 @@ export class Kiste {
       balkenLaengsAnzahl: input.balkenLaengsAnzahl,
       balkenQuerAnzahl: input.balkenQuerAnzahl,
       bodenAnzahl: Math.max(1, input.bodenAnzahl ?? 1),
+      seitenriegelAnzahl: Math.max(
+        0,
+        input.seitenriegelAnzahl ??
+          SEITENRIEGEL_DEFAULT_PRO_SEITE[input.kistentypId],
+      ),
     });
   }
 
@@ -225,6 +265,26 @@ export class Kiste {
 
   get holzBalkenQuer(): T_Holzbalken | null {
     return this.data.holzBalkenQuer ?? null;
+  }
+
+  get holzRiegel(): T_Holzriegel | null {
+    return this.data.holzRiegel ?? null;
+  }
+
+  /**
+   * Stärke des Querbalkens. In der Meisen-Spezifikation ist das der Wert, um den
+   * die gekürzten Riegel je Seite verringert werden (Schwartz 78 mm, Bellmer 98 mm).
+   */
+  private get querbalkenStaerke(): number {
+    return this.data.holzBalkenQuer?.staerke ?? 0;
+  }
+
+  private get seitenriegelProSeite(): number {
+    return Math.max(
+      0,
+      this.data.seitenriegelAnzahl ??
+        SEITENRIEGEL_DEFAULT_PRO_SEITE[this.data.kistentypId],
+    );
   }
 
   private get deckelMasse(): T_Masse {
@@ -404,6 +464,7 @@ export class Kiste {
     if (balkenLaengs) {
       components.push(balkenLaengs);
     }
+    components.push(...this.riegel);
     return components;
   }
 
@@ -439,6 +500,51 @@ export class Kiste {
     const flaecheInMm2 =
       2 * (laenge * breite + laenge * hoehe + breite * hoehe);
     return flaecheInMm2 / 1_000_000;
+  }
+
+  /** Volumen aller über Kubikmeter abgerechneten Massivholzteile (Balken + Riegel). */
+  get massivholzVolumenM3(): number {
+    return this.components
+      .filter(
+        (component) =>
+          component.type === "Balken" || component.type === "Riegel",
+      )
+      .reduce(
+        (total, component) =>
+          total +
+          (component.masse.laenge / 1000) *
+            (component.masse.breite / 1000) *
+            (component.masse.dicke / 1000) *
+            (Number(component.amount) || 0),
+        0,
+      );
+  }
+
+  /** Aufsummierte Fläche aller Plattenteile (Deckel, Boden, Seiten, Köpfe). */
+  get plattenFlaecheM2(): number {
+    return this.components
+      .filter((component) => component.type === "Brett")
+      .reduce(
+        (total, component) =>
+          total +
+          (component.masse.laenge / 1000) *
+            (component.masse.breite / 1000) *
+            (Number(component.amount) || 0),
+        0,
+      );
+  }
+
+  calculateWeightKg(
+    plattenGewichtKgProM2 = DEFAULT_PLATTEN_GEWICHT_KG_PRO_M2,
+  ): number {
+    return (
+      this.massivholzVolumenM3 * HOLZ_DICHTE_KG_PRO_M3 +
+      this.plattenFlaecheM2 * plattenGewichtKgProM2
+    );
+  }
+
+  get calculatedWeightKg(): number {
+    return this.calculateWeightKg();
   }
 
   private get deckel(): T_CalculatedComponent {
@@ -550,5 +656,128 @@ export class Kiste {
       basisMenge: (masse.laenge * masse.breite * masse.dicke) / 1_000_000_000,
       materialName: this.data.holzBalkenQuer?.typ,
     };
+  }
+
+  private buildRiegelComponent(
+    name: string,
+    amount: number,
+    laenge: number,
+  ): T_CalculatedComponent {
+    const masse: T_Masse = {
+      laenge,
+      breite: this.data.riegelBreite,
+      dicke: this.data.riegelDicke,
+    };
+    const volumenInM3 =
+      (masse.laenge / 1000) * (masse.breite / 1000) * (masse.dicke / 1000);
+    return {
+      type: "Riegel",
+      name,
+      amount,
+      masse,
+      preisInEurGesamt:
+        volumenInM3 * (this.data.holzRiegel?.preisProKubikmeter ?? 0),
+      pricingUnit: "m3",
+      basisMenge: volumenInM3,
+      materialName: this.data.holzRiegel?.typ,
+    };
+  }
+
+  /**
+   * Riegel gemäß Meisen-Kistenspezifikation. Querschnitt ist immer
+   * riegelDicke × riegelBreite, Abrechnung über Kubikmeter.
+   *
+   * Schwartz (Riegel innen, Sheet-Zeilen 35, 36, 42, 43, 48, 49)
+   * Bellmer Q  (Riegel außen, Sheet-Zeilen 36, 43, 48, 49)
+   * Bellmer LQ (Riegel außen, Sheet-Zeilen 36, 44, 49, 50)
+   */
+  get riegel(): T_CalculatedComponent[] {
+    const { laenge: innenLaenge, breite: innenBreite, hoehe: innenHoehe } =
+      this.data.innenmasse;
+    const balkenStaerke = this.querbalkenStaerke;
+    const seitenriegelJeSeite = this.seitenriegelProSeite;
+    const koepferiegel = 2 * KOEPFERIEGEL_PRO_KOPF;
+    const deckel = this.deckelMasse;
+
+    const spezifikation: Array<{
+      name: string;
+      amount: number;
+      laenge: number;
+    }> = [];
+
+    switch (this.data.kistentypId) {
+      case "schwartz":
+        spezifikation.push(
+          {
+            name: "Deckelriegel längs",
+            amount: 2,
+            laenge: deckel.laenge - 2 * DECKELRIEGEL_EINZUG_MM,
+          },
+          {
+            name: "Deckelriegel quer",
+            amount: this.data.balkenQuerAnzahl,
+            laenge:
+              deckel.breite -
+              2 * DECKELRIEGEL_EINZUG_MM -
+              2 * balkenStaerke,
+          },
+          {
+            name: "Seitenriegel längs",
+            amount: 2 * seitenriegelJeSeite,
+            laenge: innenLaenge,
+          },
+          {
+            name: "Seitenriegel senkrecht/vertikal",
+            amount: 2 * seitenriegelJeSeite,
+            laenge: innenHoehe - 2 * balkenStaerke,
+          },
+          {
+            name: "Köpferiegel waagerecht",
+            amount: koepferiegel,
+            laenge: innenBreite + 2 * this.data.riegelDicke,
+          },
+          {
+            name: "Köpferiegel senkrecht/vertikal",
+            amount: koepferiegel,
+            laenge: innenHoehe - 2 * balkenStaerke,
+          },
+        );
+        break;
+      case "bellmer_q":
+      case "bellmer_lq":
+        spezifikation.push(
+          {
+            name: "Deckelriegel quer",
+            amount: this.data.balkenQuerAnzahl,
+            laenge: deckel.breite,
+          },
+          {
+            name: "Seitenriegel senkrecht/vertikal",
+            amount: 2 * seitenriegelJeSeite,
+            laenge:
+              innenHoehe +
+              balkenStaerke +
+              2 * this.data.dickeBretter +
+              this.data.riegelDicke,
+          },
+          {
+            name: "Köpferiegel waagerecht",
+            amount: koepferiegel,
+            laenge: innenBreite - 2 * balkenStaerke,
+          },
+          {
+            name: "Köpferiegel senkrecht/vertikal",
+            amount: koepferiegel,
+            laenge: innenHoehe,
+          },
+        );
+        break;
+    }
+
+    return spezifikation
+      .filter((eintrag) => eintrag.amount > 0 && eintrag.laenge > 0)
+      .map((eintrag) =>
+        this.buildRiegelComponent(eintrag.name, eintrag.amount, eintrag.laenge),
+      );
   }
 }

@@ -10,7 +10,6 @@ import {
   Container,
   Button,
   Stack,
-  Anchor,
   Alert,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -66,10 +65,7 @@ export default function SignInPage() {
         Willkommen zurück!
       </Title>
       <Text c="dimmed" size="sm" ta="center" mt={5}>
-        Noch keinen Account?{" "}
-        <Anchor size="sm" component="a" href="/signup">
-          Jetzt registrieren
-        </Anchor>
+        Bitte mit den Zugangsdaten des Betriebs anmelden.
       </Text>
 
       <Paper withBorder shadow="md" p={30} mt={30} radius="md">

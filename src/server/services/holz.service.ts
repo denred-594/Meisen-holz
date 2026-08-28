@@ -3,11 +3,38 @@ import { db } from "@/server/db";
 import {
   holzplatten,
   holzbalken,
+  holzriegel,
   holzplattenDicken,
+  kisten,
   T_Holzplatte,
   T_Holzbalken,
+  T_Holzriegel,
 } from "@/server/db/schemas";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, or, SQL } from "drizzle-orm";
+
+/**
+ * Prüft, ob ein Material noch von Kisten verwendet wird. Materialien werden
+ * bewusst nicht stillschweigend aus Kisten entfernt – das würde deren Preis
+ * verändern, ohne dass es jemand merkt.
+ */
+async function pruefeMaterialNichtVerwendet(
+  bedingung: SQL | undefined,
+  bezeichnung: string,
+) {
+  const verwendetVon = await db
+    .select({ id: kisten.id, name: kisten.name })
+    .from(kisten)
+    .where(bedingung);
+
+  if (verwendetVon.length > 0) {
+    const liste = verwendetVon
+      .map((k) => k.name?.trim() || `Kiste #${k.id}`)
+      .join(", ");
+    throw new Error(
+      `${bezeichnung} kann nicht gelöscht werden: wird noch von ${verwendetVon.length} Kiste(n) verwendet (${liste}).`,
+    );
+  }
+}
 
 export const materialService = {
   // Holzplatten
@@ -144,7 +171,17 @@ export const materialService = {
     return withDicken!;
   },
   deleteHolzplatte: async (id: number) => {
-    await db.delete(holzplatten).where(eq(holzplatten.id, id));
+    await pruefeMaterialNichtVerwendet(
+      or(eq(kisten.holzBretterID, id), eq(kisten.holzBretterBodenID, id)),
+      "Die Holzplatte",
+    );
+    // Dicken sind Kindzeilen ohne ON DELETE CASCADE und müssen zuerst weg.
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(holzplattenDicken)
+        .where(eq(holzplattenDicken.holzplatteId, id));
+      await tx.delete(holzplatten).where(eq(holzplatten.id, id));
+    });
     return { success: true };
   },
 
@@ -193,7 +230,67 @@ export const materialService = {
     return inserted[0];
   },
   deleteHolzbalken: async (id: number) => {
+    await pruefeMaterialNichtVerwendet(
+      or(
+        eq(kisten.holzBalkenLaengsID, id),
+        eq(kisten.holzBalkenQuerID, id),
+      ),
+      "Der Holzbalken",
+    );
     await db.delete(holzbalken).where(eq(holzbalken.id, id));
+    return { success: true };
+  },
+
+  // Riegel ("Bretter für Riegel") – Abrechnung pro Kubikmeter, analog zu Holzbalken
+  getHolzriegel: async (): Promise<T_Holzriegel[]> => {
+    return await db.select().from(holzriegel).orderBy(asc(holzriegel.id));
+  },
+  getHolzriegelById: async (id: number): Promise<T_Holzriegel | undefined> => {
+    const [row] = await db
+      .select()
+      .from(holzriegel)
+      .where(eq(holzriegel.id, id));
+    return row;
+  },
+  upsertHolzriegel: async (
+    values: Partial<T_Holzriegel> & {
+      typ: string;
+      staerke: number;
+      breite: number;
+      preisProKubikmeter: number;
+      id?: number;
+    },
+  ) => {
+    if (values.id) {
+      await db
+        .update(holzriegel)
+        .set({
+          typ: values.typ,
+          staerke: values.staerke,
+          breite: values.breite,
+          preisProKubikmeter: Number(values.preisProKubikmeter),
+        })
+        .where(eq(holzriegel.id, values.id));
+      const updated = await materialService.getHolzriegelById(values.id);
+      return updated!;
+    }
+    const inserted = await db
+      .insert(holzriegel)
+      .values({
+        typ: values.typ,
+        staerke: values.staerke,
+        breite: values.breite,
+        preisProKubikmeter: Number(values.preisProKubikmeter),
+      })
+      .returning();
+    return inserted[0];
+  },
+  deleteHolzriegel: async (id: number) => {
+    await pruefeMaterialNichtVerwendet(
+      eq(kisten.holzRiegelID, id),
+      "Der Riegel",
+    );
+    await db.delete(holzriegel).where(eq(holzriegel.id, id));
     return { success: true };
   },
 };

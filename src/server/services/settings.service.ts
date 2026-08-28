@@ -24,17 +24,13 @@ export const settingsService = {
     const inserted = await db
       .insert(priceSettings)
       .values({
-        materialCostFactor: values.materialCostFactor ?? undefined,
-        generalMarkup: values.generalMarkup ?? undefined,
-        additionalMarkup1: values.additionalMarkup1 ?? undefined,
-        additionalMarkup2: values.additionalMarkup2 ?? undefined,
+        factorA: values.factorA ?? undefined,
+        factorB: values.factorB ?? undefined,
+        factorC: values.factorC ?? undefined,
+        factorD: values.factorD ?? undefined,
         hourlyRate: values.hourlyRate ?? undefined,
         workHours: values.workHours ?? undefined,
-        factorA: (values as any).factorA ?? undefined,
-        factorB: (values as any).factorB ?? undefined,
-        factorC: (values as any).factorC ?? undefined,
-        factorD: (values as any).factorD ?? undefined,
-        generalMarkupEuro: (values as any).generalMarkupEuro ?? undefined,
+        plattenGewichtKgProM2: values.plattenGewichtKgProM2 ?? undefined,
       })
       .returning();
     return inserted[0];

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect } from "react";
 import { useTRPC } from "@/lib/trpc/client";
 import {
   Button,
@@ -15,6 +15,9 @@ import {
   Text,
   Modal,
   LoadingOverlay,
+  SimpleGrid,
+  Paper,
+  Tabs,
   Accordion,
   Textarea,
   CopyButton,
@@ -26,6 +29,7 @@ import {
   BalkenSelect,
   PlatteSelect,
   DickeSelect,
+  RiegelSelect,
 } from "@/components/MaterialSelects";
 import {
   KISTEN_TYP_LABELS,
@@ -33,16 +37,32 @@ import {
   kistenTypIdEnum,
 } from "@/server/db/schemas";
 import { modals } from "@mantine/modals";
-import { Kiste } from "@/server/domain/kiste";
+import {
+  Kiste,
+  SEITENRIEGEL_DEFAULT_PRO_SEITE,
+  T_CalculatedComponent_Type,
+} from "@/server/domain/kiste";
 import { calculateFinalPrice } from "@/utils/pricing";
+import { formatDecimal, formatEuro, formatMasse } from "@/utils/format";
 // Kisten-Optionen kommen vom Server (SOT) über trpc.kisten.meta
+
+/** Abschnittstrenner im Formular – kräftiger als der Mantine-Standard. */
+const SECTION_DIVIDER = {
+  label: {
+    fontSize: "var(--mantine-font-size-xs)",
+    fontWeight: 700,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase" as const,
+    color: "var(--mantine-color-dimmed)",
+  },
+};
 
 export default function KistenPage() {
   const trpc = useTRPC();
   const { data: kisten, refetch } = useQuery(
     trpc.kisten.listWithRelations.queryOptions(undefined, {
       staleTime: 5000,
-    })
+    }),
   );
   const createMutation = useMutation(
     trpc.kisten.create.mutationOptions({
@@ -61,7 +81,7 @@ export default function KistenPage() {
           color: "red",
         });
       },
-    })
+    }),
   );
   const deleteMutation = useMutation(
     trpc.kisten.delete.mutationOptions({
@@ -75,26 +95,10 @@ export default function KistenPage() {
           color: "red",
         });
       },
-    })
+    }),
   );
-  const updateNameMutation = useMutation(
-    trpc.kisten.updateName.mutationOptions({
-      onSuccess: async () => {
-        await refetch();
-        await refetchDetails();
-      },
-      onError: (e) => {
-        notifications.show({
-          title: "Fehler",
-          message: e.message,
-          color: "red",
-        });
-      },
-    })
-  );
-
   const { data: holzplatten } = useQuery(
-    trpc.material.holzplatten.queryOptions()
+    trpc.material.holzplatten.queryOptions(),
   );
   const updateMutation = useMutation(
     trpc.kisten.update.mutationOptions({
@@ -114,7 +118,7 @@ export default function KistenPage() {
           color: "red",
         });
       },
-    })
+    }),
   );
   // const { data: meta } = useQuery(trpc.kisten.meta.queryOptions());
 
@@ -129,18 +133,19 @@ export default function KistenPage() {
       hoehe: 0,
       laenge: 0,
       breite: 0,
-      gewicht: 0,
       holzBretterID: undefined as number | undefined,
       dickeBretter: undefined as number | undefined,
       holzBretterBodenID: undefined as number | undefined,
       dickeBretterBoden: undefined as number | undefined,
       holzBalkenLaengsID: undefined as number | undefined,
       holzBalkenQuerID: undefined as number | undefined,
+      holzRiegelID: undefined as number | undefined,
       riegelDicke: 23 as number | undefined,
       riegelBreite: 100 as number | undefined,
       balkenLaengsAnzahl: 0,
       balkenQuerAnzahl: 0,
       bodenAnzahl: 1,
+      seitenriegelAnzahl: SEITENRIEGEL_DEFAULT_PRO_SEITE.schwartz,
     },
   });
   const {
@@ -150,18 +155,44 @@ export default function KistenPage() {
   } = useQuery(
     trpc.kisten.getByIdWithRelations.queryOptions(
       { id: selectedId! },
-      { enabled: Boolean(selectedId) }
-    )
+      { enabled: Boolean(selectedId) },
+    ),
   );
   const { data: pricingFactors } = useQuery(trpc.settings.get.queryOptions());
+  const plattenGewichtKgProM2 = Number(
+    (pricingFactors as any)?.plattenGewichtKgProM2 ?? 8,
+  );
   const selectedKiste = useMemo(() => {
     if (details) return Kiste.fromRow(details);
     return null;
   }, [details]);
 
+  const komponentenGruppen = useMemo(() => {
+    if (!selectedKiste) return [];
+    const reihenfolge: T_CalculatedComponent_Type[] = [
+      "Brett",
+      "Balken",
+      "Riegel",
+    ];
+    const bezeichnung: Record<T_CalculatedComponent_Type, string> = {
+      Brett: "Bretter",
+      Balken: "Balken",
+      Riegel: "Riegel",
+    };
+    return reihenfolge
+      .map((art) => ({
+        art: bezeichnung[art],
+        komponenten: selectedKiste.components.filter(
+          (component) => component.type === art && component.amount > 0,
+        ),
+      }))
+      .filter((gruppe) => gruppe.komponenten.length > 0);
+  }, [selectedKiste]);
+
   const finalPriceEur = useMemo(() => {
     return Number(
-      calculateFinalPrice(selectedKiste?.materialCost || 0, pricingFactors).final
+      calculateFinalPrice(selectedKiste?.materialCost || 0, pricingFactors)
+        .final,
     );
   }, [selectedKiste?.materialCost, pricingFactors]);
 
@@ -215,6 +246,58 @@ export default function KistenPage() {
     return { kurz, mittel, ausfuehrlich };
   }, [selectedKiste, finalPriceEur]);
 
+  const detailRows = useMemo(() => {
+    if (!selectedKiste) return [];
+    const snapshot = selectedKiste.snapshot;
+    const brettDicke = snapshot.selectedBrettVariante?.dicke;
+    const bodenDicke =
+      snapshot.selectedBrettVarianteBoden?.dicke ?? brettDicke;
+    return [
+      {
+        label: "Innenmaß (L × B × H)",
+        value: formatMasse(
+          snapshot.innenmasse.laenge,
+          snapshot.innenmasse.breite,
+          snapshot.innenmasse.hoehe,
+        ),
+      },
+      {
+        label: "Bretter",
+        value: `${snapshot.holzBrett?.typ ?? "–"}${brettDicke ? `, ${brettDicke} mm` : ""}`,
+      },
+      {
+        label: "Bodenbretter",
+        value: `${snapshot.holzBrettBoden?.typ ?? snapshot.holzBrett?.typ ?? "–"}${bodenDicke ? `, ${bodenDicke} mm` : ""} (${snapshot.bodenAnzahl}×)`,
+      },
+      {
+        label: "Balken quer",
+        value: selectedKiste.holzBalkenQuer
+          ? `${selectedKiste.holzBalkenQuer.typ} (${selectedKiste.holzBalkenQuer.staerke}×${selectedKiste.holzBalkenQuer.breite} mm), ${snapshot.balkenQuerAnzahl}×`
+          : "–",
+      },
+      {
+        label: "Balken längs",
+        value: selectedKiste.holzBalkenLaengs
+          ? `${selectedKiste.holzBalkenLaengs.typ} (${selectedKiste.holzBalkenLaengs.staerke}×${selectedKiste.holzBalkenLaengs.breite} mm), ${snapshot.balkenLaengsAnzahl}×`
+          : "–",
+      },
+      {
+        label: "Riegel",
+        value: selectedKiste.holzRiegel
+          ? `${selectedKiste.holzRiegel.typ} (${snapshot.riegelDicke}×${snapshot.riegelBreite} mm)`
+          : `${snapshot.riegelDicke}×${snapshot.riegelBreite} mm – keine Riegelart gewählt`,
+      },
+      {
+        label: "Seitenriegel pro Seite",
+        value: `${snapshot.seitenriegelAnzahl}×`,
+      },
+      {
+        label: "Außenfläche",
+        value: `${formatDecimal(selectedKiste.gesamtAussenflaecheM2, 4)} m²`,
+      },
+    ];
+  }, [selectedKiste]);
+
   useEffect(() => {
     if (!details) return;
     editForm.setValues({
@@ -224,18 +307,21 @@ export default function KistenPage() {
       laenge: details.innenLaenge,
       breite: details.innenBreite,
       hoehe: details.innenHoehe,
-      gewicht: Number(details.gewicht),
       holzBretterID: details.holzBretterID,
       dickeBretter: details.dickeBretter,
       holzBretterBodenID: details.holzBretterBodenID ?? undefined,
       dickeBretterBoden: details.dickeBretterBoden ?? undefined,
       holzBalkenLaengsID: details.holzBalkenLaengsID ?? undefined,
       holzBalkenQuerID: details.holzBalkenQuerID ?? undefined,
+      holzRiegelID: details.holzRiegelID ?? undefined,
       riegelDicke: details.riegelDicke,
       riegelBreite: details.riegelBreite,
       balkenLaengsAnzahl: details.balkenLaengsAnzahl ?? 0,
       balkenQuerAnzahl: details.balkenQuerAnzahl ?? 0,
       bodenAnzahl: details.bodenAnzahl ?? 1,
+      seitenriegelAnzahl:
+        details.seitenriegelAnzahl ??
+        SEITENRIEGEL_DEFAULT_PRO_SEITE[details.kistentyp],
     });
   }, [details]);
 
@@ -257,9 +343,12 @@ export default function KistenPage() {
   ]);
 
   function openDetails(id: number) {
+    // Kein refetchDetails() hier: der Query-Key hängt an selectedId und wird
+    // durch setSelectedId ausgelöst. Ein Refetch würde noch mit dem vorherigen
+    // selectedId laufen (beim ersten Öffnen null) und die Eingabe-Validierung
+    // des Routers verletzen.
     setSelectedId(id);
     setModalOpen(true);
-    refetchDetails();
   }
 
   async function exportKiste(id: number) {
@@ -287,33 +376,34 @@ export default function KistenPage() {
       hoehe: 500,
       laenge: 800,
       breite: 600,
-      gewicht: 10,
       holzBretterID: undefined as number | undefined,
       dickeBretter: undefined as number | undefined,
       holzBretterBodenID: undefined as number | undefined,
       dickeBretterBoden: undefined as number | undefined,
       holzBalkenLaengsID: undefined as number | undefined,
       holzBalkenQuerID: undefined as number | undefined,
+      holzRiegelID: undefined as number | undefined,
       riegelDicke: 23 as number | undefined,
       riegelBreite: 100 as number | undefined,
       balkenLaengsAnzahl: 3,
       balkenQuerAnzahl: 3,
       bodenAnzahl: 1,
+      seitenriegelAnzahl: SEITENRIEGEL_DEFAULT_PRO_SEITE.schwartz,
     },
     validate: {
       hoehe: (v) => (v && v > 0 ? null : "Pflichtfeld"),
       laenge: (v) => (v && v > 0 ? null : "Pflichtfeld"),
       breite: (v) => (v && v > 0 ? null : "Pflichtfeld"),
-      gewicht: (v) => (v && v > 0 ? null : "Pflichtfeld"),
       holzBretterID: (v) => (v ? null : "Bitte Brettermaterial wählen"),
-      dickeBretter: (v) => (v ? null : "Bitte Dicke wählen"),
+      dickeBretter: (v) => (v ? null : "Bitte Stärke wählen"),
       bodenAnzahl: (v) => (v && v >= 1 ? null : "Mindestens 1"),
       holzBalkenLaengsID: (v, values) =>
         values.kistentypId === "bellmer_lq" && !v
           ? "Bitte Balken längs wählen"
           : null,
-      riegelDicke: (v) => (v ? null : "Bitte Riegeldicke angeben"),
+      riegelDicke: (v) => (v ? null : "Bitte Riegelstärke angeben"),
       riegelBreite: (v) => (v ? null : "Bitte Riegelbreite angeben"),
+      holzRiegelID: (v) => (v ? null : "Bitte Riegelart wählen"),
     },
   });
 
@@ -341,9 +431,11 @@ export default function KistenPage() {
   const missingCreateBodenDicke =
     Boolean(createForm.values.holzBretterBodenID) &&
     !createForm.values.dickeBretterBoden;
+  const missingCreateRiegel = !createForm.values.holzRiegelID;
   const disableCreateButton =
     missingCreateLaengsbalken ||
     missingCreateBodenDicke ||
+    missingCreateRiegel ||
     !createForm.values.holzBretterID ||
     !createForm.values.dickeBretter ||
     !createForm.values.riegelDicke ||
@@ -359,16 +451,17 @@ export default function KistenPage() {
         laenge: values.laenge,
         breite: values.breite,
       },
-      gewicht: values.gewicht,
       holzBretterID: values.holzBretterID!,
       holzBretterBodenID: values.holzBretterBodenID ?? null,
       holzBalkenLaengsID: requiresLaengsbalken
         ? values.holzBalkenLaengsID!
         : null,
       holzBalkenQuerID: values.holzBalkenQuerID ?? null,
+      holzRiegelID: values.holzRiegelID ?? null,
       balkenLaengsAnzahl: values.balkenLaengsAnzahl,
       balkenQuerAnzahl: values.balkenQuerAnzahl,
       bodenAnzahl: values.bodenAnzahl,
+      seitenriegelAnzahl: values.seitenriegelAnzahl,
       dickeBretter: values.dickeBretter!,
       dickeBretterBoden: values.holzBretterBodenID
         ? values.dickeBretterBoden!
@@ -383,20 +476,35 @@ export default function KistenPage() {
     <Stack p="md" gap="md">
       <Title order={2}>Kisten konfigurieren</Title>
       <Group align="flex-start" wrap="wrap" gap="md">
-        <Card shadow="sm" padding="md" w={360} withBorder>
+        <Card shadow="sm" padding="lg" w={460} withBorder>
           <Stack gap="sm">
+            <Title order={4} mb={4}>
+              Neue Kiste
+            </Title>
             <TextInput
               label="Name (optional)"
-              placeholder="z. B. Auftrag 1234"
+              placeholder="Leer lassen für automatische Nummer"
               {...createForm.getInputProps("name")}
             />
             <Select
               label="Kistentyp"
+              allowDeselect={false}
               data={kistenTypIdEnum.enumValues.map((value) => ({
                 value,
                 label: KISTEN_TYP_LABELS[value] as string,
               }))}
-              {...createForm.getInputProps("kistentypId")}
+              value={createForm.values.kistentypId}
+              error={createForm.errors.kistentypId}
+              onChange={(value) => {
+                if (!value) return;
+                const kistentypId = value as KistenTypId;
+                createForm.setValues({
+                  ...createForm.values,
+                  kistentypId,
+                  seitenriegelAnzahl:
+                    SEITENRIEGEL_DEFAULT_PRO_SEITE[kistentypId],
+                });
+              }}
             />
             <Group grow>
               <NumberInput
@@ -412,62 +520,62 @@ export default function KistenPage() {
                 {...createForm.getInputProps("hoehe")}
               />
             </Group>
-            <NumberInput
-              label="Gewicht (kg)"
-              {...createForm.getInputProps("gewicht")}
-            />
-            <Divider label="Materialien" />
-            <PlatteSelect
-              error={createForm.errors.holzBretterID}
-              label="Brettermaterial"
-              value={createForm.values.holzBretterID}
-              onChange={(id, meta) =>
-                createForm.setValues({
-                  ...createForm.values,
-                  holzBretterID: id,
-                  dickeBretter:
-                    createForm.values.dickeBretter &&
-                    meta?.dicken.includes(createForm.values.dickeBretter)
-                      ? createForm.values.dickeBretter
-                      : undefined,
-                })
-              }
-            />
-            <DickeSelect
-              label="Dicke Bretter"
-              dicken={dickePlatten}
-              {...createForm.getInputProps("dickeBretter")}
-            />
-            <PlatteSelect
-              label="Bodenmaterial (optional)"
-              value={createForm.values.holzBretterBodenID}
-              onChange={(id, meta) =>
-                createForm.setValues({
-                  ...createForm.values,
-                  holzBretterBodenID: id,
-                  dickeBretterBoden:
-                    id &&
-                    createForm.values.dickeBretterBoden &&
-                    meta?.dicken.includes(createForm.values.dickeBretterBoden)
-                      ? createForm.values.dickeBretterBoden
-                      : undefined,
-                })
-              }
-            />
-            <DickeSelect
-              label="Dicke Boden"
-              dicken={
-                createForm.values.holzBretterBodenID ? dickePlattenBoden : []
-              }
-              value={
-                createForm.values.holzBretterBodenID
-                  ? createForm.values.dickeBretterBoden
-                  : undefined
-              }
-              onChange={(value) =>
-                createForm.setFieldValue("dickeBretterBoden", value)
-              }
-            />
+            <Divider label="Materialien" labelPosition="left" styles={SECTION_DIVIDER} />
+            <Group grow align="flex-start">
+              <PlatteSelect
+                error={createForm.errors.holzBretterID}
+                label="Brettermaterial"
+                value={createForm.values.holzBretterID}
+                onChange={(id, meta) =>
+                  createForm.setValues({
+                    ...createForm.values,
+                    holzBretterID: id,
+                    dickeBretter:
+                      createForm.values.dickeBretter &&
+                      meta?.dicken.includes(createForm.values.dickeBretter)
+                        ? createForm.values.dickeBretter
+                        : undefined,
+                  })
+                }
+              />
+              <DickeSelect
+                label="Stärke Bretter"
+                dicken={dickePlatten}
+                {...createForm.getInputProps("dickeBretter")}
+              />
+            </Group>
+            <Group grow align="flex-start">
+              <PlatteSelect
+                label="Bodenmaterial (optional)"
+                value={createForm.values.holzBretterBodenID}
+                onChange={(id, meta) =>
+                  createForm.setValues({
+                    ...createForm.values,
+                    holzBretterBodenID: id,
+                    dickeBretterBoden:
+                      id &&
+                      createForm.values.dickeBretterBoden &&
+                      meta?.dicken.includes(createForm.values.dickeBretterBoden)
+                        ? createForm.values.dickeBretterBoden
+                        : undefined,
+                  })
+                }
+              />
+              <DickeSelect
+                label="Stärke Boden"
+                dicken={
+                  createForm.values.holzBretterBodenID ? dickePlattenBoden : []
+                }
+                value={
+                  createForm.values.holzBretterBodenID
+                    ? createForm.values.dickeBretterBoden
+                    : undefined
+                }
+                onChange={(value) =>
+                  createForm.setFieldValue("dickeBretterBoden", value)
+                }
+              />
+            </Group>
             <NumberInput
               label="Anzahl Bodenbretter"
               min={1}
@@ -475,11 +583,11 @@ export default function KistenPage() {
               onChange={(v) =>
                 createForm.setFieldValue(
                   "bodenAnzahl",
-                  v === "" ? 1 : Math.max(1, Number(v))
+                  v === "" ? 1 : Math.max(1, Number(v)),
                 )
               }
             />
-            <Divider label="Balken" />
+            <Divider label="Balken" labelPosition="left" styles={SECTION_DIVIDER} />
             {createForm.values.kistentypId == "bellmer_lq" && (
               <BalkenSelect
                 label="Balken längs"
@@ -496,27 +604,53 @@ export default function KistenPage() {
                 }}
               />
             )}
-            <BalkenSelect
-              label="Balken quer"
-              {...createForm.getInputProps("holzBalkenQuerID")}
-            />
-            <Group grow>
-              {createForm.values.kistentypId === "bellmer_lq" && (
-                <NumberInput
-                  label="Anzahl Längsbalken"
-                  min={0}
-                  {...createForm.getInputProps("balkenLaengsAnzahl")}
-                />
-              )}
+            <Group grow align="flex-start">
+              <BalkenSelect
+                label="Balken quer"
+                {...createForm.getInputProps("holzBalkenQuerID")}
+              />
               <NumberInput
                 label="Anzahl Querbalken"
                 min={0}
                 {...createForm.getInputProps("balkenQuerAnzahl")}
               />
             </Group>
+            {createForm.values.kistentypId === "bellmer_lq" && (
+              <NumberInput
+                label="Anzahl Längsbalken"
+                min={0}
+                {...createForm.getInputProps("balkenLaengsAnzahl")}
+              />
+            )}
+            <Divider label="Riegel" labelPosition="left" styles={SECTION_DIVIDER} />
+            <Group grow align="flex-start">
+              <RiegelSelect
+                value={createForm.values.holzRiegelID}
+                error={createForm.errors.holzRiegelID}
+                onChange={(id, meta) =>
+                  createForm.setValues({
+                    ...createForm.values,
+                    holzRiegelID: id,
+                    riegelDicke: meta?.staerke ?? createForm.values.riegelDicke,
+                    riegelBreite: meta?.breite ?? createForm.values.riegelBreite,
+                  })
+                }
+              />
+              <NumberInput
+                label="Seitenriegel pro Seite"
+                min={0}
+                value={createForm.values.seitenriegelAnzahl}
+                onChange={(v) =>
+                  createForm.setFieldValue(
+                    "seitenriegelAnzahl",
+                    v === "" ? 0 : Math.max(0, Number(v)),
+                  )
+                }
+              />
+            </Group>
             <Group grow>
               <NumberInput
-                label="Riegeldicke (mm)"
+                label="Riegelstärke (mm)"
                 min={1}
                 {...createForm.getInputProps("riegelDicke")}
               />
@@ -536,215 +670,343 @@ export default function KistenPage() {
             >
               Kiste anlegen
             </Button>
-            {missingCreateLaengsbalken && (
-              <Text c="red" size="xs">
-                Bitte einen Längsbalken auswählen.
-              </Text>
-            )}
-            {(!createForm.values.holzBretterID ||
-              !createForm.values.dickeBretter ||
-              missingCreateBodenDicke) && (
-              <Text c="red" size="xs">
-                Platten & Dicken vollständig auswählen.
-              </Text>
-            )}
           </Stack>
         </Card>
-        <Stack flex={1} pos="relative">
-          <Title order={3}>Erstellte Kisten</Title>
-          <Table striped highlightOnHover withTableBorder withColumnBorders>
+        <Stack flex={1} miw={0} pos="relative">
+          <Title order={4}>Erstellte Kisten</Title>
+          <Table.ScrollContainer minWidth={700}>
+          <Table highlightOnHover withTableBorder verticalSpacing="sm">
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>ID</Table.Th>
+                <Table.Th w={60}>ID</Table.Th>
                 <Table.Th>Name</Table.Th>
                 <Table.Th>Typ</Table.Th>
-                <Table.Th>Maße (LxBxH)</Table.Th>
-                <Table.Th>Preis (€)</Table.Th>
-                <Table.Th>Aktionen</Table.Th>
+                <Table.Th style={{ whiteSpace: "nowrap" }}>
+                  Innenmaß (L × B × H)
+                </Table.Th>
+                <Table.Th ta="right">Gewicht</Table.Th>
+                <Table.Th ta="right">Preis</Table.Th>
+                <Table.Th w={220}>Aktionen</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {kisten?.map((k) => (
-                <Table.Tr
-                  key={k.id}
-                  onClick={() => openDetails(k.id)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <Table.Td>{k.id}</Table.Td>
-                  <Table.Td>{(k as any).name || `Kiste #${k.id}`}</Table.Td>
-                  <Table.Td>
-                    {KISTEN_TYP_LABELS?.[k.kistentyp] ?? k.kistentyp}
-                  </Table.Td>
-                  <Table.Td>
-                    {k.innenLaenge}x{k.innenBreite}x{k.innenHoehe}
-                  </Table.Td>
-                  <Table.Td>
-                    {calculateFinalPrice(
-                      Kiste.fromRow(k).materialCost,
-                      pricingFactors
-                    ).final.toFixed(2)}{" "}
-                  </Table.Td>
-                  <Table.Td w={240}>
-                    <Group>
-                      <Button
-                        size="xs"
-                        loading={exportingId === k.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          exportKiste(k.id);
-                        }}
-                        variant="light"
-                        ml="sm"
-                      >
-                        Export XLSX
-                      </Button>
-                      <Button
-                        size="xs"
-                        color="red"
-                        variant="light"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          modals.openConfirmModal({
-                            title: "Kiste löschen",
-                            children: (
-                              <Text size="sm">
-                                Diese Kiste wirklich löschen?
-                              </Text>
-                            ),
-                            confirmProps: { color: "red" },
-                            labels: { confirm: "Löschen", cancel: "Abbrechen" },
-                            onConfirm: () =>
-                              deleteMutation.mutate({ id: k.id }),
-                          });
-                        }}
-                      >
-                        Löschen
-                      </Button>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
+              {kisten?.map((k) => {
+                const aggregate = Kiste.fromRow(k);
+                return (
+                  <Table.Tr
+                    key={k.id}
+                    onClick={() => openDetails(k.id)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <Table.Td c="dimmed">{k.id}</Table.Td>
+                    <Table.Td fw={600}>
+                      {(k as any).name || `Kiste #${k.id}`}
+                    </Table.Td>
+                    <Table.Td>
+                      {KISTEN_TYP_LABELS?.[k.kistentyp] ?? k.kistentyp}
+                    </Table.Td>
+                    <Table.Td style={{ whiteSpace: "nowrap" }}>
+                      {formatMasse(k.innenLaenge, k.innenBreite, k.innenHoehe)}
+                    </Table.Td>
+                    <Table.Td
+                      ta="right"
+                      style={{
+                        whiteSpace: "nowrap",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {formatDecimal(
+                        aggregate.calculateWeightKg(plattenGewichtKgProM2),
+                      )}{" "}
+                      kg
+                    </Table.Td>
+                    <Table.Td
+                      ta="right"
+                      fw={600}
+                      style={{
+                        whiteSpace: "nowrap",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {formatEuro(
+                        calculateFinalPrice(
+                          aggregate.materialCost,
+                          pricingFactors,
+                        ).final,
+                      )}
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap="xs" wrap="nowrap" justify="flex-end">
+                        <Button
+                          size="xs"
+                          loading={exportingId === k.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            exportKiste(k.id);
+                          }}
+                          variant="light"
+                        >
+                          Export XLSX
+                        </Button>
+                        <Button
+                          size="xs"
+                          color="red"
+                          variant="subtle"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            modals.openConfirmModal({
+                              title: "Kiste löschen",
+                              children: (
+                                <Text size="sm">
+                                  Diese Kiste wirklich löschen?
+                                </Text>
+                              ),
+                              confirmProps: { color: "red" },
+                              labels: {
+                                confirm: "Löschen",
+                                cancel: "Abbrechen",
+                              },
+                              onConfirm: () =>
+                                deleteMutation.mutate({ id: k.id }),
+                            });
+                          }}
+                        >
+                          Löschen
+                        </Button>
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
             </Table.Tbody>
           </Table>
+          </Table.ScrollContainer>
           <Modal
             opened={modalOpen}
             onClose={() => setModalOpen(false)}
+            size={960}
+            padding="lg"
             title={
-              <Text fw={700} fz={24} span>
-                {details?.name || `Kiste #${details?.id}`}
-              </Text>
+              <div>
+                <Text fw={700} fz={22}>
+                  {details?.name || `Kiste #${details?.id}`}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {details
+                    ? `${KISTEN_TYP_LABELS[details.kistentyp]} · Kiste #${details.id}`
+                    : ""}
+                </Text>
+              </div>
             }
-            size="xl"
           >
             {detailsLoading && <LoadingOverlay visible />}
             {details && (
-              <Stack gap="sm">
-                <Group align="center" gap="sm">
-                  {/* <TextInput
-                    placeholder="Neuer Name"
-                    size="xs"
-                    onKeyDown={async (ev) => {
-                      if (ev.key === "Enter") {
-                        const val = (
-                          ev.currentTarget as HTMLInputElement
-                        ).value.trim();
-                        if (!val) return;
-                        updateNameMutation.mutate({
-                          id: details.id,
-                          name: val,
-                        });
-                        (ev.currentTarget as HTMLInputElement).value = "";
-                      }
-                    }}
-                  /> */}
-                </Group>
-                <Text fw={600} size="sm">
-                  Typ:{" "}
-                  <Text span fw={400}>
-                    {selectedKiste
-                      ? KISTEN_TYP_LABELS[selectedKiste.snapshot.kistentypId]
-                      : "-"}
-                  </Text>
-                </Text>
-                <Text fw={600} size="sm">
-                  Innenmaße:{" "}
-                  <Text span fw={400}>
-                    {Object.values(
-                      selectedKiste?.snapshot.innenmasse ?? {}
-                    ).join("x")}{" "}
-                    mm
-                  </Text>
-                </Text>
-                <Text fw={600} size="sm">
-                  Brett:{" "}
-                  <Text span fw={400}>
-                    {selectedKiste?.snapshot.holzBrett?.typ}{" "}
-                    {selectedKiste?.snapshot.selectedBrettVariante?.dicke} mm
-                  </Text>
-                </Text>
-                <Text fw={600} size="sm">
-                  Bodenbrett:{" "}
-                  <Text span fw={400}>
-                    {selectedKiste?.snapshot.holzBrettBoden?.typ ??
-                      selectedKiste?.snapshot.holzBrett?.typ}{" "}
-                    {selectedKiste?.snapshot.selectedBrettVarianteBoden?.dicke ??
-                      selectedKiste?.snapshot.selectedBrettVariante?.dicke}{" "}
-                    mm
-                  </Text>
-                </Text>
-                <Text fw={600} size="sm">
-                  Riegelbreite:{" "}
-                  <Text span fw={400}>
-                    {selectedKiste?.snapshot.riegelBreite} mm
-                  </Text>
-                </Text>
-                <Text fw={600} size="sm">
-                  Außenfläche (geometrisch):{" "}
-                  <Text span fw={400}>
-                    {selectedKiste?.gesamtAussenflaecheM2.toFixed(4)} m²
-                  </Text>
-                </Text>
+              <Tabs defaultValue="uebersicht" keepMounted={false}>
+                <Tabs.List mb="md">
+                  <Tabs.Tab value="uebersicht">Übersicht</Tabs.Tab>
+                  <Tabs.Tab value="bearbeiten">Bearbeiten</Tabs.Tab>
+                  <Tabs.Tab value="angebot">Angebot</Tabs.Tab>
+                </Tabs.List>
 
-                <Text fw={600} size="sm">
-                  Preis: {selectedKiste?.materialCost.toFixed(2)}€
-                </Text>
-                <Text fw={600} size="sm">
-                  Preis:{" "}
-                  <Text span fw={400}>
-                    {Number(
-                      calculateFinalPrice(
-                        selectedKiste?.materialCost || 0,
-                        pricingFactors
-                      ).final
-                    ).toFixed(2)}{" "}
-                    €
-                  </Text>
-                </Text>
-                <Divider label="Bretter" />
-                <Table withTableBorder>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Name</Table.Th>
-                      <Table.Th>Anzahl</Table.Th>
-                      <Table.Th>Maße (LxBxD)</Table.Th>
-                      <Table.Th>Typ</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {selectedKiste?.components.map((component) => (
-                      <Table.Tr key={component.name}>
-                        <Table.Td>{component.name}</Table.Td>
-                        <Table.Td>{component.amount}x</Table.Td>
-                        <Table.Td>
-                          {Object.values(component.masse).join(" x ")} mm
-                        </Table.Td>
-                        <Table.Td>{component.materialName ?? "-"}</Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-                <Divider label="Bearbeiten" />
-                <Stack gap="sm">
+                <Tabs.Panel value="uebersicht">
+                  <Stack gap="lg">
+                    <SimpleGrid cols={{ base: 1, xs: 3 }} spacing="md">
+                      {[
+                        {
+                          label: "Gewicht",
+                          value: `${formatDecimal(
+                            selectedKiste?.calculateWeightKg(
+                              plattenGewichtKgProM2,
+                            ) ?? 0,
+                          )} kg`,
+                        },
+                        {
+                          label: "Materialkosten",
+                          value: formatEuro(selectedKiste?.materialCost ?? 0),
+                        },
+                        {
+                          label: "Kalkulierter Endpreis",
+                          value: formatEuro(
+                            calculateFinalPrice(
+                              selectedKiste?.materialCost || 0,
+                              pricingFactors,
+                            ).final,
+                          ),
+                          hervorgehoben: true,
+                        },
+                      ].map((kennzahl) => (
+                        <Paper
+                          key={kennzahl.label}
+                          withBorder
+                          radius="md"
+                          p="sm"
+                        >
+                          <Text size="xs" c="dimmed">
+                            {kennzahl.label}
+                          </Text>
+                          <Text
+                            fz={22}
+                            fw={kennzahl.hervorgehoben ? 700 : 600}
+                            style={{ fontVariantNumeric: "tabular-nums" }}
+                          >
+                            {kennzahl.value}
+                          </Text>
+                        </Paper>
+                      ))}
+                    </SimpleGrid>
+
+                    <div>
+                      <Divider
+                        label="Aufbau"
+                        labelPosition="left"
+                        styles={SECTION_DIVIDER}
+                        mb="sm"
+                      />
+                      <SimpleGrid
+                        cols={{ base: 1, sm: 2 }}
+                        spacing="xl"
+                        verticalSpacing={8}
+                      >
+                        {detailRows.map((row) => (
+                          <Group
+                            key={row.label}
+                            gap="sm"
+                            wrap="nowrap"
+                            align="baseline"
+                          >
+                            <Text
+                              size="sm"
+                              c="dimmed"
+                              w={165}
+                              style={{ flexShrink: 0 }}
+                            >
+                              {row.label}
+                            </Text>
+                            <Text
+                              size="sm"
+                              fw={500}
+                              style={{ wordBreak: "break-word" }}
+                            >
+                              {row.value}
+                            </Text>
+                          </Group>
+                        ))}
+                      </SimpleGrid>
+                    </div>
+
+                    <div>
+                      <Divider
+                        label="Komponenten"
+                        labelPosition="left"
+                        styles={SECTION_DIVIDER}
+                        mb="sm"
+                      />
+                      <Table.ScrollContainer minWidth={640}>
+                        <Table
+                          withTableBorder
+                          highlightOnHover
+                          verticalSpacing={6}
+                        >
+                          <Table.Thead>
+                            <Table.Tr>
+                              <Table.Th>Komponente</Table.Th>
+                              <Table.Th ta="right" w={70}>
+                                Anzahl
+                              </Table.Th>
+                              <Table.Th style={{ whiteSpace: "nowrap" }}>
+                                Maße (L × B × D)
+                              </Table.Th>
+                              <Table.Th>Material</Table.Th>
+                              <Table.Th ta="right" w={120}>
+                                Gesamtpreis
+                              </Table.Th>
+                            </Table.Tr>
+                          </Table.Thead>
+                          <Table.Tbody>
+                            {komponentenGruppen.map((gruppe) => (
+                              <Fragment key={gruppe.art}>
+                                <Table.Tr>
+                                  <Table.Td
+                                    colSpan={5}
+                                    py={4}
+                                    style={{
+                                      background:
+                                        "var(--mantine-color-gray-0)",
+                                    }}
+                                  >
+                                    <Text
+                                      size="xs"
+                                      fw={700}
+                                      c="dimmed"
+                                      tt="uppercase"
+                                      style={{ letterSpacing: "0.04em" }}
+                                    >
+                                      {gruppe.art}
+                                    </Text>
+                                  </Table.Td>
+                                </Table.Tr>
+                                {gruppe.komponenten.map((component) => (
+                                  <Table.Tr key={component.name}>
+                                    <Table.Td>{component.name}</Table.Td>
+                                    <Table.Td ta="right">
+                                      {component.amount}×
+                                    </Table.Td>
+                                    <Table.Td
+                                      style={{
+                                        whiteSpace: "nowrap",
+                                        fontVariantNumeric: "tabular-nums",
+                                      }}
+                                    >
+                                      {formatMasse(
+                                        component.masse.laenge,
+                                        component.masse.breite,
+                                        component.masse.dicke,
+                                      )}
+                                    </Table.Td>
+                                    <Table.Td c="dimmed">
+                                      {component.materialName ?? "–"}
+                                    </Table.Td>
+                                    <Table.Td
+                                      ta="right"
+                                      style={{
+                                        whiteSpace: "nowrap",
+                                        fontVariantNumeric: "tabular-nums",
+                                      }}
+                                    >
+                                      {formatEuro(
+                                        (Number(component.preisInEurGesamt) ||
+                                          0) * (component.amount || 0),
+                                      )}
+                                    </Table.Td>
+                                  </Table.Tr>
+                                ))}
+                              </Fragment>
+                            ))}
+                          </Table.Tbody>
+                          <Table.Tfoot>
+                            <Table.Tr>
+                              <Table.Th colSpan={4} ta="right">
+                                Materialkosten gesamt
+                              </Table.Th>
+                              <Table.Th
+                                ta="right"
+                                style={{
+                                  whiteSpace: "nowrap",
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                {formatEuro(selectedKiste?.materialCost ?? 0)}
+                              </Table.Th>
+                            </Table.Tr>
+                          </Table.Tfoot>
+                        </Table>
+                      </Table.ScrollContainer>
+                    </div>
+                  </Stack>
+                </Tabs.Panel>
+
+                <Tabs.Panel value="bearbeiten">
+                  <Stack gap="sm">
                   <Group grow>
                     <NumberInput
                       label="Länge (mm)"
@@ -762,10 +1024,22 @@ export default function KistenPage() {
                   <Group grow>
                     <Select
                       label="Kistentyp"
+                      allowDeselect={false}
                       data={Object.entries(KISTEN_TYP_LABELS).map(
-                        ([value, label]) => ({ value, label: label as string })
+                        ([value, label]) => ({ value, label: label as string }),
                       )}
-                      {...editForm.getInputProps("kistentypId")}
+                      value={editForm.values.kistentypId}
+                      error={editForm.errors.kistentypId}
+                      onChange={(value) => {
+                        if (!value) return;
+                        const kistentypId = value as KistenTypId;
+                        editForm.setValues({
+                          ...editForm.values,
+                          kistentypId,
+                          seitenriegelAnzahl:
+                            SEITENRIEGEL_DEFAULT_PRO_SEITE[kistentypId],
+                        });
+                      }}
                     />
                   </Group>
                   <Group grow>
@@ -785,7 +1059,7 @@ export default function KistenPage() {
                       }
                     />
                     <DickeSelect
-                      label="Dicke Bretter"
+                      label="Stärke Bretter"
                       dicken={dickePlattenEdit}
                       {...editForm.getInputProps("dickeBretter")}
                     />
@@ -801,14 +1075,16 @@ export default function KistenPage() {
                           dickeBretterBoden:
                             id &&
                             editForm.values.dickeBretterBoden &&
-                            meta?.dicken.includes(editForm.values.dickeBretterBoden)
+                            meta?.dicken.includes(
+                              editForm.values.dickeBretterBoden,
+                            )
                               ? editForm.values.dickeBretterBoden
                               : undefined,
                         })
                       }
                     />
                     <DickeSelect
-                      label="Dicke Boden"
+                      label="Stärke Boden"
                       dicken={
                         editForm.values.holzBretterBodenID
                           ? dickePlattenBodenEdit
@@ -831,7 +1107,7 @@ export default function KistenPage() {
                     onChange={(val) =>
                       editForm.setFieldValue(
                         "bodenAnzahl",
-                        val === "" ? 1 : Math.max(1, Number(val))
+                        val === "" ? 1 : Math.max(1, Number(val)),
                       )
                     }
                   />
@@ -859,7 +1135,7 @@ export default function KistenPage() {
                     onChange={(id) =>
                       editForm.setFieldValue(
                         "holzBalkenQuerID",
-                        id ?? undefined
+                        id ?? undefined,
                       )
                     }
                   />
@@ -874,7 +1150,7 @@ export default function KistenPage() {
                         onChange={(val) =>
                           editForm.setFieldValue(
                             "balkenLaengsAnzahl",
-                            val === "" ? 0 : Number(val)
+                            val === "" ? 0 : Number(val),
                           )
                         }
                       />
@@ -887,14 +1163,28 @@ export default function KistenPage() {
                       onChange={(val) =>
                         editForm.setFieldValue(
                           "balkenQuerAnzahl",
-                          val === "" ? 0 : Number(val)
+                          val === "" ? 0 : Number(val),
                         )
                       }
                     />
                   </Group>
+                  <RiegelSelect
+                    value={editForm.values.holzRiegelID}
+                    error={editForm.errors.holzRiegelID}
+                    onChange={(id, meta) =>
+                      editForm.setValues({
+                        ...editForm.values,
+                        holzRiegelID: id,
+                        riegelDicke:
+                          meta?.staerke ?? editForm.values.riegelDicke,
+                        riegelBreite:
+                          meta?.breite ?? editForm.values.riegelBreite,
+                      })
+                    }
+                  />
                   <Group grow>
                     <NumberInput
-                      label="Riegeldicke (mm)"
+                      label="Riegelstärke (mm)"
                       min={1}
                       {...editForm.getInputProps("riegelDicke")}
                     />
@@ -904,6 +1194,17 @@ export default function KistenPage() {
                       {...editForm.getInputProps("riegelBreite")}
                     />
                   </Group>
+                  <NumberInput
+                    label="Seitenriegel pro Seite"
+                    min={0}
+                    value={editForm.values.seitenriegelAnzahl}
+                    onChange={(val) =>
+                      editForm.setFieldValue(
+                        "seitenriegelAnzahl",
+                        val === "" ? 0 : Math.max(0, Number(val)),
+                      )
+                    }
+                  />
 
                   <Group justify="flex-end">
                     <Button
@@ -927,7 +1228,6 @@ export default function KistenPage() {
                             laenge: v.laenge,
                             breite: v.breite,
                           },
-                          gewicht: v.gewicht,
                           holzBretterID: v.holzBretterID!,
                           holzBretterBodenID: v.holzBretterBodenID ?? null,
                           holzBalkenLaengsID:
@@ -935,9 +1235,11 @@ export default function KistenPage() {
                               ? v.holzBalkenLaengsID!
                               : null,
                           holzBalkenQuerID: v.holzBalkenQuerID ?? null,
+                          holzRiegelID: v.holzRiegelID ?? null,
                           balkenLaengsAnzahl: v.balkenLaengsAnzahl ?? 0,
                           balkenQuerAnzahl: v.balkenQuerAnzahl ?? 0,
                           bodenAnzahl: v.bodenAnzahl ?? 1,
+                          seitenriegelAnzahl: v.seitenriegelAnzahl,
                           dickeBretter: v.dickeBretter!,
                           dickeBretterBoden: v.holzBretterBodenID
                             ? v.dickeBretterBoden!
@@ -950,10 +1252,12 @@ export default function KistenPage() {
                       Speichern
                     </Button>
                   </Group>
+                  </Stack>
+                </Tabs.Panel>
 
-                  {angebotstexte && (
-                    <>
-                      <Divider label="Angebotstexte" />
+                <Tabs.Panel value="angebot">
+                  <Stack gap="md">
+                    {angebotstexte && (
                       <Accordion variant="contained" multiple={false}>
                         <Accordion.Item value="kurz">
                           <Accordion.Control>
@@ -1025,10 +1329,10 @@ export default function KistenPage() {
                           </Accordion.Panel>
                         </Accordion.Item>
                       </Accordion>
-                    </>
-                  )}
-                </Stack>
-              </Stack>
+                    )}
+                  </Stack>
+                </Tabs.Panel>
+              </Tabs>
             )}
           </Modal>
         </Stack>

@@ -1,40 +1,30 @@
 import "dotenv/config";
 import { auth } from "@/lib/auth";
 import { db } from "@/server/db";
-import { users } from "@/server/db/schemas";
-import { eq } from "drizzle-orm";
+import { pgPoolInstance } from "@/server/db";
+
+const EMAIL = "test@test.test";
+const PASSWORD = "testtest";
 
 async function run() {
-  const email = process.env.ADMIN_EMAIL ?? "info@holz-meisen.de";
-  const password = process.env.ADMIN_PASSWORD ?? "MeisenMeisenMeisen1!";
-  const shouldReset = process.env.ADMIN_RESET === "true";
-
-  if (password.length < 16) {
-    throw new Error("ADMIN_PASSWORD must be at least 16 characters long.");
-  }
-
-  const user = await db.query.users.findFirst({
-    where: (u, { eq }) => eq(u.email, email),
+  const existing = await db.query.users.findFirst({
+    where: (users, { eq }) => eq(users.email, EMAIL),
   });
 
-  if (user && shouldReset) {
-    await db.delete(users).where(eq(users.email, email));
+  if (existing) {
+    console.log(`Benutzer ${EMAIL} existiert bereits (id ${existing.id})`);
+  } else {
+    await auth.api.signUpEmail({
+      body: { email: EMAIL, password: PASSWORD, name: "Test" },
+    });
+    console.log(`Benutzer ${EMAIL} angelegt (Passwort: ${PASSWORD})`);
   }
 
-  if (!user || shouldReset) {
-    await auth.api.signUpEmail({
-      body: {
-        email,
-        password,
-        name: "Meisen",
-      },
-    });
-  }
+  await pgPoolInstance.end();
 }
 
-run()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+run().catch(async (error) => {
+  console.error(error);
+  await pgPoolInstance.end();
+  process.exit(1);
+});

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTRPC } from "@/lib/trpc/client";
 import {
   Stack,
@@ -15,10 +15,13 @@ import {
   Text,
   Badge,
   Checkbox,
+  Divider,
+  SimpleGrid,
 } from "@mantine/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { IconTrash, IconEdit, IconPlus } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
+import { formatDecimal, formatEuro } from "@/utils/format";
 
 type DickenVariantFormRow = {
   key: string;
@@ -51,6 +54,20 @@ const createEmptyPlatteForm = (): PlatteFormState => ({
   pendingPreis: "",
 });
 
+function mapSettingsToLocal(settings: any) {
+  return {
+    hourlyRate: settings?.hourlyRate ? Number(settings.hourlyRate) : 50,
+    workHours: settings?.workHours ? Number(settings.workHours) : 4,
+    factorA: settings?.factorA ? Number(settings.factorA) : 100 / 90,
+    factorB: settings?.factorB ? Number(settings.factorB) : 100 / 70,
+    factorC: settings?.factorC ? Number(settings.factorC) : 100 / 90,
+    factorD: settings?.factorD ? Number(settings.factorD) : 100 / 98,
+    plattenGewichtKgProM2: settings?.plattenGewichtKgProM2
+      ? Number(settings.plattenGewichtKgProM2)
+      : 8,
+  };
+}
+
 export default function SettingsPage() {
   const trpc = useTRPC();
   const { data: settings, refetch } = useQuery(
@@ -66,6 +83,9 @@ export default function SettingsPage() {
   );
   const { data: holzbalken, refetch: refetchBalken } = useQuery(
     trpc.material.holzbalken.queryOptions(),
+  );
+  const { data: holzriegel, refetch: refetchRiegel } = useQuery(
+    trpc.material.holzriegel.queryOptions(),
   );
   const upsertPlatteMutation = useMutation(
     trpc.material.upsertHolzplatte.mutationOptions({
@@ -140,37 +160,49 @@ export default function SettingsPage() {
     }),
   );
 
-  const [local, setLocal] = useState({
-    materialCostFactor: settings?.materialCostFactor
-      ? Number(settings.materialCostFactor)
-      : 1,
-    generalMarkup: settings?.generalMarkup
-      ? Number(settings.generalMarkup)
-      : 0.3,
-    additionalMarkup1: settings?.additionalMarkup1
-      ? Number(settings.additionalMarkup1)
-      : 0.1111,
-    additionalMarkup2: settings?.additionalMarkup2
-      ? Number(settings.additionalMarkup2)
-      : 0.0204,
-    hourlyRate: settings?.hourlyRate ? Number(settings.hourlyRate) : 50,
-    workHours: settings?.workHours ? Number(settings.workHours) : 4,
-    factorA: (settings as any)?.factorA
-      ? Number((settings as any).factorA)
-      : 100 / 90,
-    factorB: (settings as any)?.factorB
-      ? Number((settings as any).factorB)
-      : 100 / 70,
-    factorC: (settings as any)?.factorC
-      ? Number((settings as any).factorC)
-      : 100 / 90,
-    factorD: (settings as any)?.factorD
-      ? Number((settings as any).factorD)
-      : 100 / 98,
-    generalMarkupEuro: (settings as any)?.generalMarkupEuro
-      ? Number((settings as any).generalMarkupEuro)
-      : 0,
-  });
+  const upsertRiegelMutation = useMutation(
+    trpc.material.upsertHolzriegel.mutationOptions({
+      onSuccess: () => {
+        refetchRiegel();
+        notifications.show({
+          title: "Riegel gespeichert",
+          message: "Erfolgreich aktualisiert.",
+          color: "green",
+        });
+      },
+      onError: (e) =>
+        notifications.show({
+          title: "Fehler",
+          message: e.message,
+          color: "red",
+        }),
+    }),
+  );
+  const deleteRiegelMutation = useMutation(
+    trpc.material.deleteHolzriegel.mutationOptions({
+      onSuccess: () => {
+        refetchRiegel();
+        notifications.show({
+          title: "Riegel gelöscht",
+          message: "Eintrag entfernt.",
+          color: "orange",
+        });
+      },
+      onError: (e) =>
+        notifications.show({
+          title: "Fehler",
+          message: e.message,
+          color: "red",
+        }),
+    }),
+  );
+
+  const [local, setLocal] = useState(() => mapSettingsToLocal(settings));
+
+  useEffect(() => {
+    if (!settings) return;
+    setLocal(mapSettingsToLocal(settings));
+  }, [settings?.id]);
 
   function save() {
     updateMutation.mutate(local, {
@@ -200,8 +232,8 @@ export default function SettingsPage() {
     const dickeValue = Number(platteForm.pendingDicke);
     if (!Number.isFinite(dickeValue) || dickeValue <= 0) {
       notifications.show({
-        title: "Ungültige Dicke",
-        message: "Bitte eine positive Dicke eingeben.",
+        title: "Ungültige Stärke",
+        message: "Bitte eine positive Stärke eingeben.",
         color: "red",
       });
       return;
@@ -212,7 +244,7 @@ export default function SettingsPage() {
     ) {
       notifications.show({
         title: "Schon vorhanden",
-        message: `Die Dicke ${rounded} mm ist bereits hinterlegt.`,
+        message: `Die Stärke ${rounded} mm ist bereits hinterlegt.`,
         color: "orange",
       });
       return;
@@ -302,6 +334,40 @@ export default function SettingsPage() {
     resetBalken();
   }
 
+  // Riegel ("Bretter für Riegel") Form – Abrechnung pro Kubikmeter
+  const [riegelForm, setRiegelForm] = useState<{
+    id?: number;
+    typ: string;
+    staerke: number | string;
+    breite: number | string;
+    preisProKubikmeter: number | string;
+  }>({
+    id: undefined,
+    typ: "",
+    staerke: "",
+    breite: "",
+    preisProKubikmeter: "",
+  });
+  function resetRiegel() {
+    setRiegelForm({
+      id: undefined,
+      typ: "",
+      staerke: "",
+      breite: "",
+      preisProKubikmeter: "",
+    });
+  }
+  function submitRiegel() {
+    upsertRiegelMutation.mutate({
+      id: riegelForm.id,
+      typ: riegelForm.typ,
+      staerke: Number(riegelForm.staerke),
+      breite: Number(riegelForm.breite),
+      preisProKubikmeter: Number(riegelForm.preisProKubikmeter || 0),
+    });
+    resetRiegel();
+  }
+
   return (
     <Stack p="md" gap="md">
       <Title order={2}>Einstellungen & Materialien</Title>
@@ -310,77 +376,62 @@ export default function SettingsPage() {
           <Tabs.Tab value="preise">Preise</Tabs.Tab>
           <Tabs.Tab value="holzplatten">Holzplatten</Tabs.Tab>
           <Tabs.Tab value="holzbalken">Holzbalken</Tabs.Tab>
+          <Tabs.Tab value="riegel">Riegel (Bretter)</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="preise" pt="md">
           <Card withBorder shadow="sm" p="md">
             <Stack gap="md">
-              <Group grow>
+              <Text size="sm" c="dimmed">
+                Reihenfolge der Kalkulation: Materialkosten × Faktor A ×
+                Faktor B, dann + (Arbeitsstunden × Stundensatz), dann
+                × Faktor C × Faktor D.
+              </Text>
+              <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }} spacing="md">
                 <NumberInput
-                  label="Materialkostenfaktor"
-                  value={local.materialCostFactor}
-                  onChange={(v) =>
-                    setLocal((f) => ({ ...f, materialCostFactor: Number(v) }))
-                  }
-                />
-                <NumberInput
-                  label="Allgemeiner Aufschlag (Anteil)"
-                  value={local.generalMarkup}
-                  onChange={(v) =>
-                    setLocal((f) => ({ ...f, generalMarkup: Number(v) }))
-                  }
-                />
-              </Group>
-              <Group grow>
-                <NumberInput
-                  label="Zusatzaufschlag 1 (Anteil)"
-                  value={local.additionalMarkup1}
-                  onChange={(v) =>
-                    setLocal((f) => ({ ...f, additionalMarkup1: Number(v) }))
-                  }
-                />
-                <NumberInput
-                  label="Zusatzaufschlag 2 (Anteil)"
-                  value={local.additionalMarkup2}
-                  onChange={(v) =>
-                    setLocal((f) => ({ ...f, additionalMarkup2: Number(v) }))
-                  }
-                />
-              </Group>
-              <Group grow>
-                <NumberInput
-                  label="Faktor A (100/90)"
+                  label="Faktor A"
+                  description="Aufschlag auf die Materialkosten, z. B. 100/90 = 1,1111"
+                  decimalScale={6}
+                  step={0.01}
                   value={local.factorA}
                   onChange={(v) =>
                     setLocal((f) => ({ ...f, factorA: Number(v) }))
                   }
                 />
                 <NumberInput
-                  label="Faktor B (100/70)"
+                  label="Faktor B"
+                  description="Allgemeiner Kostenaufschlag, z. B. 100/70 = 1,4286"
+                  decimalScale={6}
+                  step={0.01}
                   value={local.factorB}
                   onChange={(v) =>
                     setLocal((f) => ({ ...f, factorB: Number(v) }))
                   }
                 />
-              </Group>
-              <Group grow>
                 <NumberInput
-                  label="Faktor C (100/90)"
+                  label="Faktor C"
+                  description="Aufschlag auf die Zwischensumme, z. B. 100/90 = 1,1111"
+                  decimalScale={6}
+                  step={0.01}
                   value={local.factorC}
                   onChange={(v) =>
                     setLocal((f) => ({ ...f, factorC: Number(v) }))
                   }
                 />
                 <NumberInput
-                  label="Faktor D (100/98)"
+                  label="Faktor D"
+                  description="Letzter Aufschlag, z. B. 100/98 = 1,0204"
+                  decimalScale={6}
+                  step={0.01}
                   value={local.factorD}
                   onChange={(v) =>
                     setLocal((f) => ({ ...f, factorD: Number(v) }))
                   }
                 />
-              </Group>
-              <Group grow>
                 <NumberInput
-                  label="Stundensatz (€)"
+                  label="Stundensatz"
+                  description="Euro pro Arbeitsstunde"
+                  suffix=" €"
+                  decimalScale={2}
                   value={local.hourlyRate}
                   onChange={(v) =>
                     setLocal((f) => ({ ...f, hourlyRate: Number(v) }))
@@ -388,24 +439,39 @@ export default function SettingsPage() {
                 />
                 <NumberInput
                   label="Arbeitsstunden"
+                  description="Kalkulierte Stunden je Kiste"
+                  suffix=" h"
+                  decimalScale={2}
+                  step={0.5}
                   value={local.workHours}
                   onChange={(v) =>
                     setLocal((f) => ({ ...f, workHours: Number(v) }))
                   }
                 />
-              </Group>
-              <Group grow>
+              </SimpleGrid>
+              <Divider label="Gewicht" labelPosition="left" />
+              <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }} spacing="md">
                 <NumberInput
-                  label="Pauschalaufschlag (€)"
-                  value={local.generalMarkupEuro}
+                  label="Plattengewicht"
+                  description="Kilogramm pro Quadratmeter Plattenmaterial"
+                  suffix=" kg/m²"
+                  min={0.01}
+                  step={0.1}
+                  decimalScale={2}
+                  value={local.plattenGewichtKgProM2}
                   onChange={(v) =>
-                    setLocal((f) => ({ ...f, generalMarkupEuro: Number(v) }))
+                    setLocal((f) => ({
+                      ...f,
+                      plattenGewichtKgProM2: Number(v),
+                    }))
                   }
                 />
+              </SimpleGrid>
+              <Group justify="flex-start" mt="xs">
+                <Button loading={updateMutation.isPending} onClick={save}>
+                  Speichern
+                </Button>
               </Group>
-              <Button loading={updateMutation.isPending} onClick={save}>
-                Speichern
-              </Button>
             </Stack>
           </Card>
         </Tabs.Panel>
@@ -427,7 +493,7 @@ export default function SettingsPage() {
                   }}
                 />
                 <Checkbox
-                  label="Vollholz (Preis in EUR/cm3)"
+                  label="Vollholz (Abrechnung in €/cm³)"
                   checked={platteForm.isVollholz ?? false}
                   onChange={(event) =>
                     setPlatteForm((f) => ({
@@ -445,7 +511,7 @@ export default function SettingsPage() {
                 />
                 <Group align="flex-end" gap="xs" wrap="wrap">
                   <NumberInput
-                    label="Neue Dicke (mm)"
+                    label="Neue Stärke (mm)"
                     placeholder="z. B. 18"
                     value={
                       platteForm.pendingDicke === ""
@@ -461,7 +527,7 @@ export default function SettingsPage() {
                   />
                   <NumberInput
                     label={
-                      platteForm.isVollholz ? "Preis EUR/cm3" : "Preis EUR/m2"
+                      platteForm.isVollholz ? "Preis (€/cm³)" : "Preis (€/m²)"
                     }
                     placeholder="z. B. 24"
                     step={0.1}
@@ -490,11 +556,11 @@ export default function SettingsPage() {
                   <Table highlightOnHover withTableBorder>
                     <Table.Thead>
                       <Table.Tr>
-                        <Table.Th style={{ width: "40%" }}>Dicke (mm)</Table.Th>
+                        <Table.Th style={{ width: "40%" }}>Stärke (mm)</Table.Th>
                         <Table.Th style={{ width: "40%" }}>
                           {platteForm.isVollholz
-                            ? "Preis EUR/cm3"
-                            : "Preis EUR/m2"}
+                            ? "Preis (€/cm³)"
+                            : "Preis (€/m²)"}
                         </Table.Th>
                         <Table.Th style={{ width: "20%" }}></Table.Th>
                       </Table.Tr>
@@ -593,15 +659,17 @@ export default function SettingsPage() {
             </Card>
             <Stack flex={1}>
               <Title order={4}>Holzplatten Übersicht</Title>
-              <Table striped highlightOnHover withTableBorder>
+              <Table highlightOnHover withTableBorder verticalSpacing="sm">
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>ID</Table.Th>
+                    <Table.Th w={60}>ID</Table.Th>
                     <Table.Th>Typ</Table.Th>
                     <Table.Th>Einheit</Table.Th>
-                    <Table.Th>Breite (mm)</Table.Th>
-                    <Table.Th>Dicken & Preise</Table.Th>
-                    <Table.Th></Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>
+                      Breite (mm)
+                    </Table.Th>
+                    <Table.Th>Stärken & Preise</Table.Th>
+                    <Table.Th w={80}></Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -624,10 +692,19 @@ export default function SettingsPage() {
                       }
                       key={p.id}
                     >
-                      <Table.Td>{p.id}</Table.Td>
-                      <Table.Td>{p.typ}</Table.Td>
-                      <Table.Td>{p.isVollholz ? "EUR/cm3" : "EUR/m2"}</Table.Td>
-                      <Table.Td>{p.breite ?? "-"}</Table.Td>
+                      <Table.Td c="dimmed">{p.id}</Table.Td>
+                      <Table.Td fw={600}>{p.typ}</Table.Td>
+                      <Table.Td>
+                        <Badge
+                          size="sm"
+                          variant="light"
+                          tt="none"
+                          color={p.isVollholz ? "orange" : "blue"}
+                        >
+                          {p.isVollholz ? "€/cm³" : "€/m²"}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>{p.breite ? `${p.breite} mm` : "–"}</Table.Td>
                       <Table.Td>
                         {p.dicken?.length ? (
                           <Group gap={4} wrap="wrap">
@@ -635,10 +712,15 @@ export default function SettingsPage() {
                               <Badge
                                 key={`${p.id}-${variante.id}`}
                                 variant="light"
+                                tt="none"
+                                style={{ fontVariantNumeric: "tabular-nums" }}
                               >
-                                {variante.dicke} mm /{" "}
-                                {Number(variante.preis).toFixed(4)}{" "}
-                                {p.isVollholz ? "EUR/cm3" : "EUR/m2"}
+                                {variante.dicke} mm ·{" "}
+                                {formatDecimal(
+                                  variante.preis,
+                                  p.isVollholz ? 4 : 2,
+                                )}{" "}
+                                {p.isVollholz ? "€/cm³" : "€/m²"}
                               </Badge>
                             ))}
                           </Group>
@@ -649,7 +731,7 @@ export default function SettingsPage() {
                         )}
                       </Table.Td>
                       <Table.Td>
-                        <Group gap={4}>
+                        <Group gap={2} wrap="nowrap" justify="flex-end">
                           <ActionIcon
                             size="sm"
                             variant="subtle"
@@ -726,7 +808,7 @@ export default function SettingsPage() {
                   onChange={(v) => setBalkenForm((f) => ({ ...f, breite: v }))}
                 />
                 <NumberInput
-                  label="Preis €/m³"
+                  label="Preis (€/m³)"
                   value={
                     balkenForm.preisProKubikmeter
                       ? Number(balkenForm.preisProKubikmeter)
@@ -760,29 +842,35 @@ export default function SettingsPage() {
             </Card>
             <Stack flex={1}>
               <Title order={4}>Holzbalken Übersicht</Title>
-              <Table striped highlightOnHover withTableBorder>
+              <Table highlightOnHover withTableBorder verticalSpacing="sm">
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>ID</Table.Th>
+                    <Table.Th w={60}>ID</Table.Th>
                     <Table.Th>Typ</Table.Th>
-                    <Table.Th>Stärke</Table.Th>
-                    <Table.Th>Breite</Table.Th>
-                    <Table.Th>Preis €/m³</Table.Th>
-                    <Table.Th></Table.Th>
+                    <Table.Th ta="right">Stärke</Table.Th>
+                    <Table.Th ta="right">Breite</Table.Th>
+                    <Table.Th ta="right" style={{ whiteSpace: "nowrap" }}>Preis (€/m³)</Table.Th>
+                    <Table.Th w={90}></Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {holzbalken?.map((b) => (
                     <Table.Tr key={b.id}>
-                      <Table.Td>{b.id}</Table.Td>
-                      <Table.Td>{b.typ}</Table.Td>
-                      <Table.Td>{b.staerke}</Table.Td>
-                      <Table.Td>{b.breite}</Table.Td>
-                      <Table.Td>
-                        {Number(b.preisProKubikmeter).toFixed(2)}
+                      <Table.Td c="dimmed">{b.id}</Table.Td>
+                      <Table.Td fw={600}>{b.typ}</Table.Td>
+                      <Table.Td ta="right">{b.staerke} mm</Table.Td>
+                      <Table.Td ta="right">{b.breite} mm</Table.Td>
+                      <Table.Td
+                        ta="right"
+                        style={{
+                          whiteSpace: "nowrap",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {formatEuro(b.preisProKubikmeter)}
                       </Table.Td>
                       <Table.Td>
-                        <Group gap={4}>
+                        <Group gap={2} wrap="nowrap" justify="flex-end">
                           <ActionIcon
                             size="sm"
                             variant="subtle"
@@ -807,6 +895,144 @@ export default function SettingsPage() {
                             loading={deleteBalkenMutation.isPending}
                             onClick={() =>
                               deleteBalkenMutation.mutate({ id: b.id })
+                            }
+                          >
+                            <IconTrash size={16} />
+                          </ActionIcon>
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Stack>
+          </Group>
+        </Tabs.Panel>
+        <Tabs.Panel value="riegel" pt="md">
+          <Group align="flex-start" wrap="wrap" gap="lg">
+            <Card withBorder shadow="sm" w={340} p="md">
+              <Stack gap="sm">
+                <Title order={4}>
+                  {riegelForm.id ? "Riegel bearbeiten" : "Riegel hinzufügen"}
+                </Title>
+                <Text size="xs" c="dimmed">
+                  Bretter für Riegel – Abrechnung wie bei den Balken pro
+                  Kubikmeter.
+                </Text>
+                <TextInput
+                  label="Typ"
+                  value={riegelForm.typ}
+                  onChange={(e) => {
+                    const value = e.currentTarget.value;
+                    setRiegelForm((f) => ({ ...f, typ: value }));
+                  }}
+                />
+                <NumberInput
+                  label="Stärke (mm)"
+                  value={
+                    riegelForm.staerke ? Number(riegelForm.staerke) : undefined
+                  }
+                  onChange={(v) => setRiegelForm((f) => ({ ...f, staerke: v }))}
+                />
+                <NumberInput
+                  label="Breite (mm)"
+                  value={
+                    riegelForm.breite ? Number(riegelForm.breite) : undefined
+                  }
+                  onChange={(v) => setRiegelForm((f) => ({ ...f, breite: v }))}
+                />
+                <NumberInput
+                  label="Preis (€/m³)"
+                  value={
+                    riegelForm.preisProKubikmeter
+                      ? Number(riegelForm.preisProKubikmeter)
+                      : undefined
+                  }
+                  onChange={(v) =>
+                    setRiegelForm((f) => ({ ...f, preisProKubikmeter: v }))
+                  }
+                />
+                <Group>
+                  <Button
+                    size="sm"
+                    loading={upsertRiegelMutation.isPending}
+                    onClick={submitRiegel}
+                    disabled={
+                      !riegelForm.typ ||
+                      !riegelForm.staerke ||
+                      !riegelForm.breite
+                    }
+                  >
+                    Speichern
+                  </Button>
+                  {riegelForm.id && (
+                    <Button
+                      size="sm"
+                      variant="light"
+                      color="gray"
+                      onClick={resetRiegel}
+                    >
+                      Abbrechen
+                    </Button>
+                  )}
+                </Group>
+              </Stack>
+            </Card>
+            <Stack flex={1}>
+              <Title order={4}>Riegel Übersicht</Title>
+              <Table highlightOnHover withTableBorder verticalSpacing="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th w={60}>ID</Table.Th>
+                    <Table.Th>Typ</Table.Th>
+                    <Table.Th ta="right">Stärke</Table.Th>
+                    <Table.Th ta="right">Breite</Table.Th>
+                    <Table.Th ta="right" style={{ whiteSpace: "nowrap" }}>Preis (€/m³)</Table.Th>
+                    <Table.Th w={90}></Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {holzriegel?.map((r) => (
+                    <Table.Tr key={r.id}>
+                      <Table.Td c="dimmed">{r.id}</Table.Td>
+                      <Table.Td fw={600}>{r.typ}</Table.Td>
+                      <Table.Td ta="right">{r.staerke} mm</Table.Td>
+                      <Table.Td ta="right">{r.breite} mm</Table.Td>
+                      <Table.Td
+                        ta="right"
+                        style={{
+                          whiteSpace: "nowrap",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {formatEuro(r.preisProKubikmeter)}
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap={2} wrap="nowrap" justify="flex-end">
+                          <ActionIcon
+                            size="sm"
+                            variant="subtle"
+                            aria-label="Bearbeiten"
+                            onClick={() =>
+                              setRiegelForm({
+                                id: r.id,
+                                typ: r.typ,
+                                staerke: r.staerke,
+                                breite: r.breite,
+                                preisProKubikmeter: r.preisProKubikmeter,
+                              })
+                            }
+                          >
+                            <IconEdit size={16} />
+                          </ActionIcon>
+                          <ActionIcon
+                            size="sm"
+                            variant="subtle"
+                            color="red"
+                            aria-label="Löschen"
+                            loading={deleteRiegelMutation.isPending}
+                            onClick={() =>
+                              deleteRiegelMutation.mutate({ id: r.id })
                             }
                           >
                             <IconTrash size={16} />

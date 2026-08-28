@@ -8,17 +8,13 @@ export const settingsRouter = router({
   update: publicProcedure
     .input(
       z.object({
-        materialCostFactor: z.number().optional(),
-        generalMarkup: z.number().optional(),
-        additionalMarkup1: z.number().optional(),
-        additionalMarkup2: z.number().optional(),
-        hourlyRate: z.number().optional(),
-        workHours: z.number().optional(),
-        factorA: z.number().optional(),
-        factorB: z.number().optional(),
-        factorC: z.number().optional(),
-        factorD: z.number().optional(),
-        generalMarkupEuro: z.number().optional(),
+        factorA: z.number().positive().optional(),
+        factorB: z.number().positive().optional(),
+        factorC: z.number().positive().optional(),
+        factorD: z.number().positive().optional(),
+        hourlyRate: z.number().min(0).optional(),
+        workHours: z.number().min(0).optional(),
+        plattenGewichtKgProM2: z.number().positive().optional(),
       })
     )
     .mutation(async ({ input }) => settingsService.update(input)),

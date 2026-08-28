@@ -6,6 +6,7 @@ import { materialService } from "@/server/services/holz.service";
 export const materialRouter = router({
   holzplatten: publicProcedure.query(materialService.getHolzplatten),
   holzbalken: publicProcedure.query(materialService.getHolzbalken),
+  holzriegel: publicProcedure.query(materialService.getHolzriegel),
   upsertHolzplatte: publicProcedure
     .input(
       z.object({
@@ -35,10 +36,24 @@ export const materialRouter = router({
       }),
     )
     .mutation(async ({ input }) => materialService.upsertHolzbalken(input)),
+  upsertHolzriegel: publicProcedure
+    .input(
+      z.object({
+        id: z.number().int().positive().optional(),
+        typ: z.string(),
+        staerke: z.number().int().positive(),
+        breite: z.number().int().positive(),
+        preisProKubikmeter: z.coerce.number(),
+      }),
+    )
+    .mutation(async ({ input }) => materialService.upsertHolzriegel(input)),
   deleteHolzplatte: publicProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ input }) => materialService.deleteHolzplatte(input.id)),
   deleteHolzbalken: publicProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ input }) => materialService.deleteHolzbalken(input.id)),
+  deleteHolzriegel: publicProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ input }) => materialService.deleteHolzriegel(input.id)),
 });

@@ -13,11 +13,37 @@ import {
   T_KisteConfigInput as DomainKisteConfigInput,
   T_KisteData,
 } from "@/server/domain/kiste";
+import { settingsService } from "@/server/services/settings.service";
 
 export type T_KisteConfigInput = DomainKisteConfigInput;
 export type T_KisteDto = T_Kiste;
 
 const mapRowToDto = (row: T_Kiste): T_KisteDto => row;
+
+async function recalculateAndPersistWeight(id: number): Promise<void> {
+  const settings = await settingsService.getLatest();
+  const plattenGewichtKgProM2 = Number(settings.plattenGewichtKgProM2 ?? 8);
+  const rowWithRelations = await db.query.kisten.findFirst({
+    where: eq(kisten.id, id),
+    with: {
+      bretter: { with: { varianten: true } },
+      bretterBoden: { with: { varianten: true } },
+      balkenLaengs: true,
+      balkenQuer: true,
+      riegel: true,
+    },
+  });
+
+  if (!rowWithRelations) return;
+
+  const calculatedWeight = DomainKiste.fromRow(
+    rowWithRelations,
+  ).calculateWeightKg(plattenGewichtKgProM2);
+  await db
+    .update(kisten)
+    .set({ gewicht: Number(calculatedWeight.toFixed(2)) })
+    .where(eq(kisten.id, id));
+}
 
 function mapSnapshotToDb(snapshot: T_KisteData) {
   return {
@@ -30,9 +56,11 @@ function mapSnapshotToDb(snapshot: T_KisteData) {
     holzBretterBodenID: snapshot.holzBretterBodenID ?? null,
     holzBalkenLaengsID: snapshot.holzBalkenLaengsID ?? null,
     holzBalkenQuerID: snapshot.holzBalkenQuerID ?? null,
+    holzRiegelID: snapshot.holzRiegelID ?? null,
     balkenLaengsAnzahl: snapshot.balkenLaengsAnzahl ?? 0,
     balkenQuerAnzahl: snapshot.balkenQuerAnzahl ?? 0,
     bodenAnzahl: snapshot.bodenAnzahl ?? 1,
+    seitenriegelAnzahl: snapshot.seitenriegelAnzahl,
     dickeBretter: snapshot.dickeBretter,
     dickeBretterBoden: snapshot.dickeBretterBoden ?? null,
     riegelDicke: snapshot.riegelDicke,
@@ -66,7 +94,15 @@ export const kistenService = {
       row.name = fallbackName as T_Kiste["name"];
     }
 
-    return mapRowToDto(row);
+    await recalculateAndPersistWeight(row.id);
+
+    const [updatedRow] = await db
+      .select()
+      .from(kisten)
+      .where(eq(kisten.id, row.id));
+    if (!updatedRow) return mapRowToDto(row);
+
+    return mapRowToDto(updatedRow);
   },
 
   list: async (): Promise<T_KisteDto[]> => {
@@ -83,6 +119,7 @@ export const kistenService = {
         bretterBoden: { with: { varianten: true } },
         balkenLaengs: true,
         balkenQuer: true,
+        riegel: true,
       },
     });
     return rows.map(mapRowToDto);
@@ -101,6 +138,7 @@ export const kistenService = {
         bretterBoden: { with: { varianten: true } },
         balkenLaengs: true,
         balkenQuer: true,
+        riegel: true,
       },
     });
     return row;
@@ -134,7 +172,7 @@ export const kistenService = {
 
   update: async (
     id: number,
-    input: T_KisteConfigInput
+    input: T_KisteConfigInput,
   ): Promise<T_KisteDto | undefined> => {
     const normalizedName = input.name?.trim() ?? "";
     const domainKiste = DomainKiste.fromConfig({
@@ -150,6 +188,8 @@ export const kistenService = {
         ...mapSnapshotToDb(snapshot),
       })
       .where(eq(kisten.id, id));
+
+    await recalculateAndPersistWeight(id);
 
     const [row] = await db.select().from(kisten).where(eq(kisten.id, id));
     if (!row) return undefined;
