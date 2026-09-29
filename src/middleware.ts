@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 
-export async function proxy(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const session = await auth.api.getSession({
     headers: await headers(),
   });
   if (!session) {
-    return NextResponse.redirect(new URL("/signin", request.url));
+    const signinUrl = new URL("/signin", request.url);
+    signinUrl.searchParams.set(
+      "callbackUrl",
+      request.nextUrl.pathname + request.nextUrl.search,
+    );
+    return NextResponse.redirect(signinUrl);
   }
   return NextResponse.next();
 }
+
 export const config = {
-  //   runtime: "nodejs",
   matcher: ["/((?!signin|api|_next/static|_next/image).*)"],
 };
