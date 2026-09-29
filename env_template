@@ -9,5 +9,5 @@ BETTER_AUTH_SECRET=please-change-this-secret
 BETTER_AUTH_URL=http://localhost:3000
 
 # Admin user created by seed script (only used when RUN_SEED=true)
-ADMIN_EMAIL=test@test.test
-ADMIN_PASSWORD=DasIstEinRiesenGroßerTest
+ADMIN_EMAIL=info@holz-meisen.de
+ADMIN_PASSWORD=MeisenMeisenMeisen1!

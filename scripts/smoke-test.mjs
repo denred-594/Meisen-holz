@@ -73,7 +73,7 @@ await pruefe("sign-in mit korrektem Passwort", async () => {
         "content-type": "application/json",
         origin: BASE,
       },
-      body: JSON.stringify({ email: "test@test.test", password: "testtest" }),
+      body: JSON.stringify({ email: "info@holz-meisen.de", password: "MeisenMeisenMeisen1" }),
     });
     if (res.ok) break;
   }
@@ -98,7 +98,7 @@ await erwarteFehler(
     const res = await fetch(`${BASE}/api/auth/sign-in/email`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: BASE },
-      body: JSON.stringify({ email: "test@test.test", password: "falsch" }),
+      body: JSON.stringify({ email: "info@holz-meisen.de", password: "falsch" }),
     });
     if (res.ok) throw Object.assign(new Error("angenommen"), { ok: true });
     throw new Error(`abgelehnt mit HTTP ${res.status}`);
