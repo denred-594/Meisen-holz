@@ -3,8 +3,8 @@ import { auth } from "@/lib/auth";
 import { db } from "@/server/db";
 import { pgPoolInstance } from "@/server/db";
 
-const EMAIL = process.env.ADMIN_EMAIL || "test@test.test";
-const PASSWORD = process.env.ADMIN_PASSWORD || "DasIstEinRiesenGroßerTest";
+const EMAIL = process.env.ADMIN_EMAIL || "info@holz-meisen.de";
+const PASSWORD = process.env.ADMIN_PASSWORD || "MeisenMeisenMeisen1!";
 
 async function run() {
   const existing = await db.query.users.findFirst({
